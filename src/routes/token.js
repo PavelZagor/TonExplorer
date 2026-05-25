@@ -1,0 +1,107 @@
+'use strict';
+
+const { toRaw, isValid } = require('../lib/address');
+const { upsertDeveloper, upsertJetton, recordAnalysis, getDeveloper } = require('../db');
+const { buildDeveloperCard } = require('../analyzers/developer');
+const { pickTopHolders, concentrationFlags } = require('../analyzers/holders');
+
+module.exports = function tokenRoute({ tonapi, db }) {
+  return async function token(req, res) {
+    const input = req.params.address;
+    if (!isValid(input)) {
+      return res.status(400).json({ ok: false, error: { code: 'bad_address', message: 'invalid TON address' } });
+    }
+    const raw = toRaw(input);
+
+    let jetton;
+    try {
+      jetton = await tonapi.getJetton(raw);
+    } catch (err) {
+      const status = err.response?.status;
+      if (status === 404) {
+        return res.status(404).json({ ok: false, error: { code: 'not_found', message: 'jetton not found' } });
+      }
+      // eslint-disable-next-line no-console
+      console.warn('[token] tonapi getJetton failed', err.message);
+      return res.status(502).json({ ok: false, error: { code: 'upstream_unavailable', message: 'tonapi unreachable' } });
+    }
+
+    const metadata = jetton.metadata || {};
+    const adminAddr = jetton.admin?.address || null;
+
+    // Phase 0 deployer derivation — best effort, page-1 only.
+    const probable = await tonapi.getProbableDeployer(raw).catch(() => null);
+    const deployerAddr = probable?.address || null;
+    const deployedAt = probable?.at || null;
+
+    let holders = { total: jetton.holders_count || 0, top: [] };
+    try {
+      const holdersPayload = await tonapi.getJettonHolders(raw, { limit: 20 });
+      holders = pickTopHolders(holdersPayload, 10);
+      // Holders endpoint sometimes reports its own total — prefer that, fall back to master's.
+      if (!holders.total) holders.total = jetton.holders_count || 0;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[token] holders fetch failed', err.message);
+    }
+
+    // Best-effort registry writes. Failures here must NOT fail the response.
+    let devRow = null;
+    try {
+      if (deployerAddr) devRow = upsertDeveloper(db, deployerAddr);
+      upsertJetton(db, {
+        address: raw,
+        deployer: deployerAddr,
+        admin: adminAddr,
+        symbol: metadata.symbol || null,
+        name: metadata.name || null,
+        decimals: metadata.decimals != null ? Number(metadata.decimals) : null,
+        supply: jetton.total_supply || null,
+        deployed_at: deployedAt,
+        fate: 'unknown',
+      });
+      if (deployerAddr) devRow = getDeveloper(db, deployerAddr);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[token] db write failed (non-fatal)', err.message);
+    }
+
+    const signals = concentrationFlags(holders);
+
+    const verdict = {
+      phase: 0,
+      score: null,
+      summary: 'Phase 0 build — verdict scoring not yet wired.',
+      signals,
+    };
+
+    try {
+      recordAnalysis(db, { jetton: raw, score: null, verdict });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[token] recordAnalysis failed (non-fatal)', err.message);
+    }
+
+    res.json({
+      ok: true,
+      data: {
+        token: {
+          address: raw,
+          address_friendly: input !== raw ? input : null,
+          name: metadata.name || null,
+          symbol: metadata.symbol || null,
+          decimals: metadata.decimals != null ? Number(metadata.decimals) : null,
+          supply: jetton.total_supply || null,
+          admin: adminAddr,
+          deployer: deployerAddr,
+          deployer_hint: probable?.hint || null,
+          deployed_at: deployedAt,
+          holders_count: jetton.holders_count || holders.total || 0,
+        },
+        developer: buildDeveloperCard(devRow),
+        holders,
+        verdict,
+      },
+    });
+  };
+};

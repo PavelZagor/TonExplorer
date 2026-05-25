@@ -1,0 +1,38 @@
+# Secrets / local config
+.env
+.env.local
+.env.*.local
+
+# Local runtime data (SQLite DB, caches, logs)
+data/
+logs/
+*.sqlite
+*.sqlite-journal
+*.db
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp.*
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# PM2 / process managers
+.pm2/
+ecosystem.local.config.js
+nginx.local.conf
+
+# Build artifacts (kept just in case anyone adds a bundler later)
+dist/
+build/
+.cache/
+
+# Anything matching a hostname we don't want leaked stays gitignored
+*.local.md
