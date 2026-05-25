@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
 
+const { logger } = require('../lib/logger');
+
 function openDb(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const db = new Database(filePath);
@@ -37,8 +39,7 @@ function runMigrations(db) {
       stmt.run(file, Math.floor(Date.now() / 1000));
     });
     tx();
-    // eslint-disable-next-line no-console
-    console.log(`[ton-explorer] migrated ${file}`);
+    logger.info('migrated', { file });
   }
 }
 
@@ -95,7 +96,26 @@ function recordAnalysis(db, { jetton, score, verdict }) {
 }
 
 function getDeveloper(db, address) {
-  return db.prepare('SELECT * FROM developers WHERE address = ?').get(address);
+  const row = db.prepare('SELECT * FROM developers WHERE address = ?').get(address);
+  if (!row) return null;
+  // Counts are derived from the jettons table on every read so they cannot drift
+  // out of sync with the underlying data. The denormalized columns on `developers`
+  // are kept (zero-default) so the schema doesn't break; a later migration can drop them.
+  const counts = db
+    .prepare(`
+      SELECT
+        COUNT(*)                                              AS jettons_count,
+        SUM(CASE WHEN fate = 'rugged' THEN 1 ELSE 0 END)      AS rugs_count,
+        SUM(CASE WHEN fate = 'alive'  THEN 1 ELSE 0 END)      AS alive_count
+      FROM jettons WHERE deployer = ?
+    `)
+    .get(address);
+  return {
+    ...row,
+    jettons_count: counts.jettons_count || 0,
+    rugs_count:    counts.rugs_count    || 0,
+    alive_count:   counts.alive_count   || 0,
+  };
 }
 
 function listJettonsByDeployer(db, address) {

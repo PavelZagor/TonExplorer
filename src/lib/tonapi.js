@@ -69,26 +69,36 @@ function makeTonApiClient({ network = 'mainnet', apiKey = '', timeoutMs = 12_000
     });
   }
 
-  // First-ever inbound transaction — used to derive the jetton master deployer.
-  // TonAPI doesn't expose "first tx" directly; we walk events from the oldest by pulling pages until empty.
-  // For Phase 0 we just grab the most recent page and return the oldest event there as a best-effort.
-  // The walker (Phase 1) will do a full traversal.
+  // Best-effort deployer derivation for Phase 0. The real walker (Phase 1) will paginate
+  // backward via `before_lt` until it bottoms out; for now we only claim a deployer if
+  // a single page already covers the entire history of the master account.
+  //
+  // Conservative rules:
+  //   - if the oldest page is full (limit hit), we cannot know we've reached the start
+  //     → return null with a hint, NOT a misleading guess
+  //   - if the page is short, the oldest event on it is the deploy; its counterparty is
+  //     the deployer — never the master itself
   async function getProbableDeployer(masterAddress) {
+    const LIMIT = 100;
+    let evts;
     try {
-      const evts = await getAccountEvents(masterAddress, { limit: 100 });
-      const events = (evts && evts.events) || [];
-      if (events.length === 0) return null;
-      // Sort ascending by timestamp; the very first event's primary actor is our best guess.
-      events.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-      const first = events[0];
-      const actor =
-        (first.actions && first.actions[0] && (first.actions[0].simple_preview?.actor || first.actions[0]?.TonTransfer?.sender?.address)) ||
-        first.account?.address ||
-        null;
-      return { address: actor, at: first.timestamp || null, hint: 'best-effort, page-1 only' };
-    } catch (err) {
+      evts = await getAccountEvents(masterAddress, { limit: LIMIT });
+    } catch {
       return null;
     }
+    const events = (evts && evts.events) || [];
+    if (events.length === 0) return null;
+    if (events.length >= LIMIT) {
+      return { address: null, at: null, hint: 'history exceeds 100 events — walker required' };
+    }
+    // TonAPI returns events newest-first; the deploy lives at the end.
+    events.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    const first = events[0];
+    const counterparty = extractCounterparty(first, masterAddress);
+    if (!counterparty) {
+      return { address: null, at: first.timestamp || null, hint: 'oldest event has no identifiable counterparty' };
+    }
+    return { address: counterparty, at: first.timestamp || null, hint: 'derived from first event on master account' };
   }
 
   return {
@@ -102,6 +112,36 @@ function makeTonApiClient({ network = 'mainnet', apiKey = '', timeoutMs = 12_000
     getAccountEvents,
     getProbableDeployer,
   };
+}
+
+// Walks a TonAPI event and returns the first non-master address it finds inside any
+// action object, scanning both the typed sub-object (SmartContractExec.executor, etc.)
+// and simple_preview.accounts. Returns null if every address is the master itself.
+function extractCounterparty(event, masterAddress) {
+  const seen = new Set();
+  function walk(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    if (typeof obj.address === 'string' && obj.address !== masterAddress) return obj.address;
+    if (seen.has(obj)) return null;
+    seen.add(obj);
+    if (Array.isArray(obj)) {
+      for (const v of obj) {
+        const hit = walk(v);
+        if (hit) return hit;
+      }
+      return null;
+    }
+    for (const v of Object.values(obj)) {
+      const hit = walk(v);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  for (const a of event.actions || []) {
+    const hit = walk(a);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 module.exports = { makeTonApiClient };

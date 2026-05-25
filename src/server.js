@@ -8,6 +8,7 @@ const express = require('express');
 const { openDb, runMigrations } = require('./db');
 const { makeTonApiClient } = require('./lib/tonapi');
 const { makeRateLimiter } = require('./lib/rate-limit');
+const { logger, requestLogger } = require('./lib/logger');
 const buildRoutes = require('./routes');
 
 const PORT = Number(process.env.PORT || 3031);
@@ -40,6 +41,8 @@ async function main() {
   app.set('trust proxy', TRUST_PROXY);
   app.set('x-powered-by', false);
 
+  app.use(requestLogger(logger));
+
   // Read-only API — only GET is allowed.
   app.use((req, res, next) => {
     if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
@@ -63,6 +66,7 @@ async function main() {
   const ctx = {
     db,
     tonapi,
+    logger,
     config: {
       version: pkg.version,
       network: NETWORK,
@@ -89,14 +93,17 @@ async function main() {
   });
 
   app.use((err, req, res, _next) => {
-    // eslint-disable-next-line no-console
-    console.error('[ton-explorer] unhandled', err);
+    (req.log || logger).error('unhandled', { err: err && err.stack ? err.stack : String(err) });
     res.status(500).json({ ok: false, error: { code: 'internal', message: 'internal error' } });
   });
 
   app.listen(PORT, () => {
-    // eslint-disable-next-line no-console
-    console.log(`[ton-explorer] v${pkg.version} listening on :${PORT} basePath=${BASE_PATH || '/'} network=${NETWORK}`);
+    logger.info('listening', {
+      version: pkg.version,
+      port: PORT,
+      base_path: BASE_PATH || '/',
+      network: NETWORK,
+    });
   });
 }
 
@@ -107,7 +114,6 @@ function renderIndex(basePath) {
 }
 
 main().catch((err) => {
-  // eslint-disable-next-line no-console
-  console.error('[ton-explorer] fatal', err);
+  logger.error('fatal', { err: err && err.stack ? err.stack : String(err) });
   process.exit(1);
 });

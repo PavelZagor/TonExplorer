@@ -22,34 +22,15 @@ npm start
 
 ## Production with PM2
 
-Create `ecosystem.config.js` **locally** (do not commit it if it contains anything host-specific):
-
-```js
-// ecosystem.local.config.js — gitignored via .gitignore
-module.exports = {
-  apps: [
-    {
-      name: "ton-explorer",
-      cwd: "/srv/ton-explorer",         // your install dir
-      script: "src/server.js",
-      instances: 1,
-      autorestart: true,
-      max_memory_restart: "256M",
-      env_file: ".env",
-      out_file: "logs/out.log",
-      error_file: "logs/err.log",
-      time: true,
-    },
-  ],
-};
-```
-
-Bring it up:
+A committed `ecosystem.config.js` lives at the repo root. It is intentionally generic — `cwd: __dirname` makes it self-locating, and every runtime knob (PORT, BASE_PATH, TONAPI_KEY, …) is read from `.env` via dotenv inside `src/server.js`. So nothing host-specific lives in the committed config.
 
 ```bash
-pm2 start ecosystem.local.config.js
-pm2 save
+pm2 start ecosystem.config.js
+pm2 save                      # persist the process list across reboots
+pm2 logs ton-explorer         # tail
 ```
+
+The structured logger built into `src/lib/logger.js` already emits ISO timestamps inside every JSON line, so the PM2 config deliberately omits `log_date_format` — otherwise each line would be double-stamped.
 
 ## nginx vhost (sketch)
 

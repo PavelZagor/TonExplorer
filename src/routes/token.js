@@ -21,8 +21,7 @@ module.exports = function tokenRoute({ tonapi, db }) {
       if (status === 404) {
         return res.status(404).json({ ok: false, error: { code: 'not_found', message: 'jetton not found' } });
       }
-      // eslint-disable-next-line no-console
-      console.warn('[token] tonapi getJetton failed', err.message);
+      req.log?.warn('tonapi.getJetton failed', { address: raw, status, err: err.message });
       return res.status(502).json({ ok: false, error: { code: 'upstream_unavailable', message: 'tonapi unreachable' } });
     }
 
@@ -41,8 +40,7 @@ module.exports = function tokenRoute({ tonapi, db }) {
       // Holders endpoint sometimes reports its own total — prefer that, fall back to master's.
       if (!holders.total) holders.total = jetton.holders_count || 0;
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn('[token] holders fetch failed', err.message);
+      req.log?.warn('tonapi.getJettonHolders failed', { address: raw, err: err.message });
     }
 
     // Best-effort registry writes. Failures here must NOT fail the response.
@@ -62,8 +60,7 @@ module.exports = function tokenRoute({ tonapi, db }) {
       });
       if (deployerAddr) devRow = getDeveloper(db, deployerAddr);
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn('[token] db write failed (non-fatal)', err.message);
+      req.log?.warn('db write failed (non-fatal)', { address: raw, err: err.message });
     }
 
     const signals = concentrationFlags(holders);
@@ -78,8 +75,7 @@ module.exports = function tokenRoute({ tonapi, db }) {
     try {
       recordAnalysis(db, { jetton: raw, score: null, verdict });
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn('[token] recordAnalysis failed (non-fatal)', err.message);
+      req.log?.warn('recordAnalysis failed (non-fatal)', { address: raw, err: err.message });
     }
 
     res.json({

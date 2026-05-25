@@ -20,13 +20,14 @@ Active sprint = **Phase 0 (Foundation)** from [`ROADMAP.md`](./ROADMAP.md). Chec
 
 ## Next up (start of Phase 1)
 
-- [ ] `npm install` on the dev host and a real end-to-end smoke test against mainnet TonAPI
-- [ ] Wire up to PM2 (`ecosystem.config.js`) — DO NOT commit host-specific bits; keep PM2 config generic
-- [ ] nginx vhost snippet documented in `docs/06-deployment.md` (placeholder hostname only)
-- [ ] Add structured logging (timestamps, request ID) instead of bare `console.log`
-- [ ] Background developer-walker: `node tools/walk-developers.js` enumerates a known deployer's other jettons via TonAPI
+- [x] `npm install` on the dev host and a real end-to-end smoke test against mainnet TonAPI
+- [x] Add structured logging (timestamps, request ID) instead of bare `console.log`
+- [x] Developer reputation card in UI (already shipped in Phase 0; counters now computed on-read)
+- [x] Wire up to PM2 (`ecosystem.config.js` committed — generic, `cwd: __dirname`, all knobs from `.env`)
+- [x] nginx vhost snippet documented in `docs/06-deployment.md` (placeholder hostname only); live on the dev host behind TLS via a `location ^~ /explorer/` block
+- [ ] Background developer-walker: `node tools/walk-developers.js` paginates `/v2/accounts/.../events` with `before_lt` until the bottom, then upserts every jetton the deployer ever shipped
 - [ ] Per-jetton fate classifier v0: `alive | dead | rugged | unknown` based on `last_tx_age`, `holders_count`, `mint_active`
-- [ ] Developer reputation card in UI
+- [ ] Tighten deployer derivation: today we only claim a deployer if the master account has ≤100 lifetime events. Once the walker exists, drop the page-1 limit and reuse the walker's pagination here too.
 
 ## Quality-of-life backlog
 
