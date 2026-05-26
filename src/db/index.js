@@ -223,6 +223,131 @@ function deleteWalletLink(db, id) {
   return info.changes > 0;
 }
 
+// --- Trading: pools, trades, sync state ---
+
+function upsertTradingPool(db, pool) {
+  const now = Math.floor(Date.now() / 1000);
+  const stmt = db.prepare(`
+    INSERT INTO trading_pools (
+      pool_address, dex, jetton_master, paired_with, pool_type,
+      base_decimals, quote_decimals, reserve_base, reserve_quote,
+      trade_fee_bps, last_synced
+    )
+    VALUES (
+      @pool_address, @dex, @jetton_master, @paired_with, @pool_type,
+      @base_decimals, @quote_decimals, @reserve_base, @reserve_quote,
+      @trade_fee_bps, @last_synced
+    )
+    ON CONFLICT(pool_address) DO UPDATE SET
+      dex            = excluded.dex,
+      jetton_master  = excluded.jetton_master,
+      paired_with    = excluded.paired_with,
+      pool_type      = excluded.pool_type,
+      base_decimals  = excluded.base_decimals,
+      quote_decimals = excluded.quote_decimals,
+      reserve_base   = excluded.reserve_base,
+      reserve_quote  = excluded.reserve_quote,
+      trade_fee_bps  = excluded.trade_fee_bps,
+      last_synced    = excluded.last_synced
+  `);
+  stmt.run({
+    pool_address:   pool.pool_address,
+    dex:            pool.dex,
+    jetton_master:  pool.jetton_master,
+    paired_with:    pool.paired_with,
+    pool_type:      pool.pool_type ?? null,
+    base_decimals:  pool.base_decimals ?? null,
+    quote_decimals: pool.quote_decimals ?? null,
+    reserve_base:   pool.reserve_base != null ? String(pool.reserve_base) : null,
+    reserve_quote:  pool.reserve_quote != null ? String(pool.reserve_quote) : null,
+    trade_fee_bps:  pool.trade_fee_bps ?? null,
+    last_synced:    pool.last_synced ?? now,
+  });
+  return db.prepare('SELECT * FROM trading_pools WHERE pool_address = ?').get(pool.pool_address);
+}
+
+function getTradingPool(db, poolAddress) {
+  return db.prepare('SELECT * FROM trading_pools WHERE pool_address = ?').get(poolAddress) || null;
+}
+
+function listTradingPoolsByJetton(db, jettonMaster) {
+  return db
+    .prepare('SELECT * FROM trading_pools WHERE jetton_master = ? ORDER BY (CAST(reserve_quote AS REAL)) DESC')
+    .all(jettonMaster);
+}
+
+// Insert-or-ignore by (pool_address, lt). Returns the number of rows actually inserted.
+function insertTrades(db, poolAddress, rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return 0;
+  const stmt = db.prepare(`
+    INSERT OR IGNORE INTO trades (
+      pool_address, lt, ts, side, trader,
+      asset_in, asset_out, amount_in, amount_out, price_native
+    ) VALUES (
+      @pool_address, @lt, @ts, @side, @trader,
+      @asset_in, @asset_out, @amount_in, @amount_out, @price_native
+    )
+  `);
+  let inserted = 0;
+  const tx = db.transaction((batch) => {
+    for (const r of batch) {
+      const info = stmt.run({
+        pool_address: poolAddress,
+        lt:           String(r.lt),
+        ts:           Number(r.ts),
+        side:         r.side,
+        trader:       r.trader,
+        asset_in:     r.asset_in,
+        asset_out:    r.asset_out,
+        amount_in:    String(r.amount_in),
+        amount_out:   String(r.amount_out),
+        price_native: r.price_native != null ? Number(r.price_native) : null,
+      });
+      inserted += info.changes;
+    }
+  });
+  tx(rows);
+  return inserted;
+}
+
+function getTradesRange(db, poolAddress, { before, limit = 100 } = {}) {
+  if (before != null) {
+    return db
+      .prepare('SELECT * FROM trades WHERE pool_address = ? AND ts < ? ORDER BY ts DESC LIMIT ?')
+      .all(poolAddress, Number(before), Math.max(1, Math.min(1000, limit)));
+  }
+  return db
+    .prepare('SELECT * FROM trades WHERE pool_address = ? ORDER BY ts DESC LIMIT ?')
+    .all(poolAddress, Math.max(1, Math.min(1000, limit)));
+}
+
+function getTradesBetween(db, poolAddress, fromTs, toTs) {
+  return db
+    .prepare('SELECT * FROM trades WHERE pool_address = ? AND ts >= ? AND ts < ? ORDER BY ts ASC')
+    .all(poolAddress, Number(fromTs), Number(toTs));
+}
+
+function getSyncState(db, poolAddress) {
+  return db.prepare('SELECT * FROM trading_sync_state WHERE pool_address = ?').get(poolAddress) || null;
+}
+
+function setSyncState(db, poolAddress, { oldestTs, newestTs, fullySynced }) {
+  const prev = getSyncState(db, poolAddress);
+  const oldest = oldestTs != null ? Number(oldestTs) : prev?.oldest_synced_ts ?? null;
+  const newest = newestTs != null ? Number(newestTs) : prev?.newest_synced_ts ?? null;
+  const fully  = fullySynced != null ? (fullySynced ? 1 : 0) : prev?.fully_synced ?? 0;
+  const stmt = db.prepare(`
+    INSERT INTO trading_sync_state (pool_address, oldest_synced_ts, newest_synced_ts, fully_synced)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(pool_address) DO UPDATE SET
+      oldest_synced_ts = COALESCE(excluded.oldest_synced_ts, trading_sync_state.oldest_synced_ts),
+      newest_synced_ts = COALESCE(excluded.newest_synced_ts, trading_sync_state.newest_synced_ts),
+      fully_synced     = excluded.fully_synced
+  `);
+  stmt.run(poolAddress, oldest, newest, fully);
+  return getSyncState(db, poolAddress);
+}
+
 // --- internals ---
 
 function safeParseJson(s, fallback) {
@@ -246,4 +371,13 @@ module.exports = {
   listWalletLinks,
   upsertWalletLink,
   deleteWalletLink,
+  // trading
+  upsertTradingPool,
+  getTradingPool,
+  listTradingPoolsByJetton,
+  insertTrades,
+  getTradesRange,
+  getTradesBetween,
+  getSyncState,
+  setSyncState,
 };
