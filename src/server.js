@@ -10,6 +10,8 @@ const { makeTonApiClient } = require('./lib/tonapi');
 const { makeRateLimiter } = require('./lib/rate-limit');
 const { logger, requestLogger } = require('./lib/logger');
 const { makeAdminAuth } = require('./lib/auth');
+const { makeDedustClient } = require('./services/dedust-client');
+const { makeDexDetection } = require('./services/dex-detection');
 const buildRoutes = require('./routes');
 const buildAdminWalletRouter = require('./routes/admin/wallet');
 
@@ -39,6 +41,14 @@ async function main() {
     network: NETWORK,
     apiKey: process.env.TONAPI_KEY || '',
   });
+
+  const dedust = makeDedustClient({
+    baseURL: process.env.DEDUST_API_URL || undefined,
+    cacheTtlSec: Number(process.env.DEDUST_CACHE_TTL_SECONDS || 300),
+    logger,
+  });
+
+  const dexDetection = makeDexDetection({ dedust, logger });
 
   const app = express();
   app.set('trust proxy', TRUST_PROXY);
@@ -73,6 +83,8 @@ async function main() {
   const ctx = {
     db,
     tonapi,
+    dedust,
+    dexDetection,
     logger,
     config: {
       version: pkg.version,
@@ -80,6 +92,8 @@ async function main() {
       basePath: BASE_PATH,
       publicOrigin: PUBLIC_ORIGIN,
       startedAt: STARTED_AT,
+      tradingBackfillLimit:  Number(process.env.TRADING_BACKFILL_LIMIT  || 500),
+      tradingIncrementLimit: Number(process.env.TRADING_INCREMENT_LIMIT || 200),
     },
   };
 
