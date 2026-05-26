@@ -62,6 +62,13 @@ function makeTonApiClient({ network = 'mainnet', apiKey = '', timeoutMs = 12_000
     return get(`/v2/accounts/${encodeURIComponent(address)}/jettons`, { ttlMs: 60_000 });
   }
 
+  // Free-text address/name search. Returns an array of { address, name, preview, trust }.
+  // `name` for jettons looks like "Tether · jetton" — the route layer strips the suffix.
+  async function searchAccounts(name) {
+    if (typeof name !== 'string' || !name.trim()) return { addresses: [] };
+    return get('/v2/accounts/search', { params: { name: name.trim() }, ttlMs: 30_000 });
+  }
+
   async function getAccountEvents(address, { limit = 50, beforeLt } = {}) {
     return get(`/v2/accounts/${encodeURIComponent(address)}/events`, {
       params: { limit, before_lt: beforeLt },
@@ -111,6 +118,7 @@ function makeTonApiClient({ network = 'mainnet', apiKey = '', timeoutMs = 12_000
     getAccountJettons,
     getAccountEvents,
     getProbableDeployer,
+    searchAccounts,
   };
 }
 

@@ -29,15 +29,16 @@
   </header>
 
   <main class="max-w-5xl mx-auto px-4 py-8 space-y-6">
-    <section class="bg-slate-900/60 border border-slate-800 rounded-lg p-4">
-      <label class="block text-sm text-slate-300 mb-2" for="address">Jetton master address (raw <span class="mono">0:</span>… or friendly <span class="mono">EQ…</span>)</label>
-      <div class="flex gap-2">
+    <section class="bg-slate-900/60 border border-slate-800 rounded-lg p-4 relative">
+      <label class="block text-sm text-slate-300 mb-2" for="address">Search jetton — paste an address (raw <span class="mono">0:</span>… / friendly <span class="mono">EQ…</span>) or type a ticker / name</label>
+      <div class="flex gap-2 relative">
         <input id="address" type="text" autocomplete="off" spellcheck="false"
                class="flex-1 mono text-sm bg-slate-950 border border-slate-700 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-               placeholder="EQ... or 0:..." />
+               placeholder="EQ... / 0:... / e.g. usdt" />
         <button id="go" class="bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white px-4 py-2 rounded font-medium">Analyze</button>
+        <div id="search-dropdown" class="hidden absolute left-0 right-16 top-full mt-1 bg-slate-900 border border-slate-700 rounded shadow-lg z-30 max-h-80 overflow-y-auto"></div>
       </div>
-      <p id="hint" class="text-xs text-slate-500 mt-2">Tip: paste a jetton master address from tonviewer.com or tonscan.org.</p>
+      <p id="hint" class="text-xs text-slate-500 mt-2">Tip: paste a jetton master address from tonviewer.com or tonscan.org, or type a ticker like <span class="mono">usdt</span>.</p>
     </section>
 
     <section id="result" class="hidden space-y-4"></section>
@@ -137,8 +138,84 @@
 
     let currentData = null; // last analysis response, so we can re-render after edits
 
-    addrInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') analyze(); });
-    goBtn.addEventListener('click', analyze);
+    addrInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { hideSearchDropdown(); analyze(); }
+      else if (e.key === 'Escape') hideSearchDropdown();
+    });
+    goBtn.addEventListener('click', () => { hideSearchDropdown(); analyze(); });
+
+    // --- jetton search dropdown ---------------------------------------------
+    const searchDropdown = $('#search-dropdown');
+    const ADDRESS_LIKE_RE = /^(EQ|UQ|kQ|0Q)[A-Za-z0-9_-]{46}$|^-?\d+:[0-9a-fA-F]{64}$/;
+    let searchAbort = null;
+    let searchDebounce = null;
+
+    function hideSearchDropdown() {
+      searchDropdown.classList.add('hidden');
+      searchDropdown.innerHTML = '';
+    }
+
+    function renderSearchResults(items) {
+      if (!items.length) {
+        searchDropdown.innerHTML = '<div class="px-3 py-2 text-xs text-slate-500">No results.</div>';
+        searchDropdown.classList.remove('hidden');
+        return;
+      }
+      searchDropdown.innerHTML = items.map((it) => {
+        const label = escapeHtml(it.symbol || it.name || '—');
+        const sub = it.source === 'local' ? 'local'
+                  : it.trust === 'whitelist' ? 'whitelist'
+                  : 'tonapi';
+        const subColor = it.trust === 'whitelist' ? 'text-emerald-300'
+                       : it.source === 'local' ? 'text-emerald-300'
+                       : 'text-slate-500';
+        return `
+          <button type="button" data-addr="${escapeHtml(it.address)}"
+                  class="js-search-result w-full text-left px-3 py-2 hover:bg-slate-800 border-b border-slate-800 last:border-b-0 flex items-center gap-2">
+            <span class="text-sm text-slate-100 font-medium">${label}</span>
+            <span class="mono text-[10px] text-slate-500 truncate-addr flex-1">${escapeHtml(it.address)}</span>
+            <span class="text-[10px] ${subColor} uppercase tracking-wider">${sub}</span>
+          </button>
+        `;
+      }).join('');
+      searchDropdown.classList.remove('hidden');
+      searchDropdown.querySelectorAll('.js-search-result').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          addrInput.value = btn.dataset.addr;
+          hideSearchDropdown();
+          analyze();
+        });
+      });
+    }
+
+    async function runSearch(q) {
+      if (searchAbort) searchAbort.abort();
+      searchAbort = new AbortController();
+      try {
+        const r = await fetch(`${BASE}/api/search?q=${encodeURIComponent(q)}&limit=10`, { signal: searchAbort.signal });
+        const body = await r.json();
+        if (!body.ok) { hideSearchDropdown(); return; }
+        if (body.data.kind === 'address') {
+          // The address-like fast-path doesn't need a dropdown.
+          hideSearchDropdown();
+          return;
+        }
+        renderSearchResults(body.data.results || []);
+      } catch (err) {
+        if (err.name !== 'AbortError') hideSearchDropdown();
+      }
+    }
+
+    addrInput.addEventListener('input', () => {
+      const v = addrInput.value.trim();
+      clearTimeout(searchDebounce);
+      if (v.length < 2 || ADDRESS_LIKE_RE.test(v)) { hideSearchDropdown(); return; }
+      searchDebounce = setTimeout(() => runSearch(v), 300);
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!searchDropdown.contains(e.target) && e.target !== addrInput) hideSearchDropdown();
+    });
 
     // --- formatting helpers -------------------------------------------------
 

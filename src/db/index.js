@@ -124,6 +124,24 @@ function listJettonsByDeployer(db, address) {
     .all(address);
 }
 
+// Full-text-ish search over `jettons.symbol` and `jettons.name`. The local
+// table only contains jettons we've previously analysed, so this is the
+// fast-path / recall side of the search; the route layer adds a TonAPI
+// fallback on miss.
+function searchJettons(db, q, limit = 10) {
+  if (typeof q !== 'string' || q.trim().length === 0) return [];
+  const needle = `%${q.trim().replace(/[%_]/g, (c) => '\\' + c)}%`;
+  return db
+    .prepare(`
+      SELECT address, symbol, name, decimals, deployed_at, last_seen_at
+      FROM jettons
+      WHERE symbol LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\'
+      ORDER BY last_seen_at DESC
+      LIMIT ?
+    `)
+    .all(needle, needle, Math.max(1, Math.min(50, Math.trunc(limit))));
+}
+
 // --- Lookups (append-only snapshot history) ---
 
 function recordLookup(db, { jetton, holders_count, top1_share, top10_share, signals, source_ip }) {
@@ -363,6 +381,7 @@ module.exports = {
   recordAnalysis,
   getDeveloper,
   listJettonsByDeployer,
+  searchJettons,
   recordLookup,
   getLookupHistory,
   getWallet,
