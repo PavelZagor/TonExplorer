@@ -25,9 +25,16 @@ Active sprint = **Phase 0 (Foundation)** from [`ROADMAP.md`](./ROADMAP.md). Chec
 - [x] Developer reputation card in UI (already shipped in Phase 0; counters now computed on-read)
 - [x] Wire up to PM2 (`ecosystem.config.js` committed — generic, `cwd: __dirname`, all knobs from `.env`)
 - [x] nginx vhost snippet documented in `docs/06-deployment.md` (placeholder hostname only); live on the dev host behind TLS via a `location ^~ /explorer/` block
+- [x] **Lookups history table** — every `/api/token/:address` hit persists a `(jetton, ts, holders_count, top1_share, top10_share, signals, source_ip)` row (append-only). Enables future time-series UI.
+- [x] **Wallet registry** — `wallets` (address PK + label + notes + tags) and `wallet_links` (from_addr → to_addr with kind ∈ {funded_by, cluster_with, controls}). Token route now bulk-resolves labels for admin/deployer/top-holders.
+- [x] **Admin endpoints (Bearer-auth)** — `GET/PUT /api/admin/wallet/:address`, `POST /api/admin/wallet/:address/links`, `DELETE /api/admin/wallet/links/:id`. Gated by `ADMIN_TOKEN` in `.env`; 503 when unset, 401 on bad token.
+- [x] **UI: inline editor** — pencil ✎ next to every rendered address opens a label/tags/notes form, plus a ⚙ settings overlay for the admin token (stored in localStorage).
 - [ ] Background developer-walker: `node tools/walk-developers.js` paginates `/v2/accounts/.../events` with `before_lt` until the bottom, then upserts every jetton the deployer ever shipped
 - [ ] Per-jetton fate classifier v0: `alive | dead | rugged | unknown` based on `last_tx_age`, `holders_count`, `mint_active`
 - [ ] Tighten deployer derivation: today we only claim a deployer if the master account has ≤100 lifetime events. Once the walker exists, drop the page-1 limit and reuse the walker's pagination here too.
+- [ ] `GET /api/token/:address/history` — return last N rows from `lookups`; render as a sparkline of `holders_count` + a verdicts list in the UI.
+- [ ] **Trade history** (largest piece). Background indexer per "interesting" jetton: paginate `/v2/blockchain/accounts/{master}/transactions` with `before_lt` until either we hit the 30-day cutoff or the start of history. Store in a new `jetton_trades` table; expose a timeline panel. (At ~700ms / 100 tx, a busy meme like PUTIN takes ~20 min for a month, so this is strictly background, not on-demand.)
+- [ ] **LP-aware concentration flags** — once a `wallet.tags` contains `lp`, exclude that holder from the top-N concentration sums. Today PUTIN's top-1 (26.66%) is the DeDust pool, so the no-signals verdict is the right call but for the wrong reason.
 
 ## Quality-of-life backlog
 

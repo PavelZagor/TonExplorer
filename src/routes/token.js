@@ -1,7 +1,14 @@
 'use strict';
 
 const { toRaw, isValid } = require('../lib/address');
-const { upsertDeveloper, upsertJetton, recordAnalysis, getDeveloper } = require('../db');
+const {
+  upsertDeveloper,
+  upsertJetton,
+  recordAnalysis,
+  getDeveloper,
+  recordLookup,
+  getWallets,
+} = require('../db');
 const { buildDeveloperCard } = require('../analyzers/developer');
 const { pickTopHolders, concentrationFlags } = require('../analyzers/holders');
 
@@ -72,11 +79,38 @@ module.exports = function tokenRoute({ tonapi, db }) {
       signals,
     };
 
+    const top1 = holders.top[0]?.share ?? null;
+    const top10 = holders.top.slice(0, 10).reduce((s, h) => s + (h.share || 0), 0) || null;
+
     try {
       recordAnalysis(db, { jetton: raw, score: null, verdict });
+      recordLookup(db, {
+        jetton: raw,
+        holders_count: holders.total || jetton.holders_count || 0,
+        top1_share: top1,
+        top10_share: top10,
+        signals,
+        source_ip: req.ip || null,
+      });
     } catch (err) {
-      req.log?.warn('recordAnalysis failed (non-fatal)', { address: raw, err: err.message });
+      req.log?.warn('lookup persist failed (non-fatal)', { address: raw, err: err.message });
     }
+
+    // Resolve user-managed labels for every address we are about to render.
+    const addrsToResolve = [adminAddr, deployerAddr, ...holders.top.map((h) => h.address)].filter(Boolean);
+    const walletMap = (() => {
+      try { return getWallets(db, addrsToResolve); } catch { return new Map(); }
+    })();
+    const labelOf = (addr) => {
+      if (!addr) return null;
+      const w = walletMap.get(addr);
+      if (!w) return null;
+      return { label: w.label || null, tags: w.tags || [], notes: w.notes || null };
+    };
+    const decoratedHolders = {
+      ...holders,
+      top: holders.top.map((h) => ({ ...h, wallet: labelOf(h.address) })),
+    };
 
     res.json({
       ok: true,
@@ -89,13 +123,15 @@ module.exports = function tokenRoute({ tonapi, db }) {
           decimals: metadata.decimals != null ? Number(metadata.decimals) : null,
           supply: jetton.total_supply || null,
           admin: adminAddr,
+          admin_wallet: labelOf(adminAddr),
           deployer: deployerAddr,
+          deployer_wallet: labelOf(deployerAddr),
           deployer_hint: probable?.hint || null,
           deployed_at: deployedAt,
           holders_count: jetton.holders_count || holders.total || 0,
         },
         developer: buildDeveloperCard(devRow),
-        holders,
+        holders: decoratedHolders,
         verdict,
       },
     });

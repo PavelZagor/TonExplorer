@@ -4,6 +4,20 @@ Newest first. Append a fresh entry at the top of this file after every significa
 
 ---
 
+## 2026-05-25 — Wallet registry + lookups history + admin editor
+
+First user-managed state lands. Every token analysis now persists a snapshot row in `lookups` (append-only, future time-series feed). Every address we render in the UI is resolved against a new `wallets` table so the maintainer can attach labels, free-form notes, and a bounded set of tags (`lp / mev / farm / cex / rugger / trusted` plus free-form, lowercased + punctuation-stripped, max 8). Wallets can also be linked to other wallets via `wallet_links` with a constrained kind set (`funded_by / cluster_with / controls`).
+
+- **Migration `002_lookups_and_wallets.sql`** — three tables plus indexes. `wallets.tags` is a JSON array column (stringified) and parsed at the DB-helper boundary so callers always see a real array.
+- **Admin subtree under `/api/admin/*`** (write-capable). Gated by a Bearer token from `ADMIN_TOKEN` in `.env` (generate via `openssl rand -hex 32`). When the env var is unset, the entire subtree responds 503 `admin_disabled` — fail-closed. Public read-only routes are untouched: the GET-only method guard now exempts only the admin prefix.
+- **Token route bulk-resolves labels** via `getWallets(db, addresses)` for `{admin, deployer, holders.top[].address}` in a single SQL `IN (…)` query. Response gains `admin_wallet`, `deployer_wallet`, and `holders.top[].wallet` fields.
+- **UI** — `renderAddress(addr, wallet, opts)` is the single source of truth for how addresses are drawn (label + short addr + tag chips + ✎ pencil). Pencil opens an overlay editor pre-filled from `GET /api/admin/wallet/:address`; saving PUTs back. On 401 the user is prompted for the token (stored in `localStorage['tonexplorer.admin_token']`). A ⚙ icon in the header lets you set/clear the token without going through an edit flow. Preset tags render as toggleable colour-coded chips; free-form tags can be typed in the comma input below.
+- **Smoke** (against `https://your-server.example.com/explorer/`): 401 without/with bogus token; 200 saves "PUTIN/TON DeDust pool" + `lp` tag on the pool address; subsequent `GET /api/token/<PUTIN master>` shows the label on holder #1; lookups table accumulates rows; link validation rejects bogus kinds and self-links.
+
+Known gap exposed by this session: PUTIN's top-1 holder is the labelled LP pool (26.66% of supply) but `concentrationFlags` still counts it as ordinary concentration. Marked as the next backlog item — "LP-aware concentration flags".
+
+---
+
 ## 2026-05-25 — PM2 + nginx, public dev URL live
 
 TonExplorer now runs under PM2 and is reachable via TLS at `https://your-server.example.com/explorer/`. The same `0:3a14…7c14` PUTIN smoke that worked locally now works end-to-end through nginx.

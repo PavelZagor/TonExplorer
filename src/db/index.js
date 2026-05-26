@@ -124,6 +124,112 @@ function listJettonsByDeployer(db, address) {
     .all(address);
 }
 
+// --- Lookups (append-only snapshot history) ---
+
+function recordLookup(db, { jetton, holders_count, top1_share, top10_share, signals, source_ip }) {
+  const stmt = db.prepare(`
+    INSERT INTO lookups (jetton, created_at, holders_count, top1_share, top10_share, signals_json, source_ip)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  const info = stmt.run(
+    jetton,
+    Math.floor(Date.now() / 1000),
+    holders_count ?? null,
+    top1_share ?? null,
+    top10_share ?? null,
+    JSON.stringify(signals || []),
+    source_ip || null,
+  );
+  return info.lastInsertRowid;
+}
+
+function getLookupHistory(db, jetton, limit = 50) {
+  const rows = db
+    .prepare('SELECT id, created_at, holders_count, top1_share, top10_share, signals_json FROM lookups WHERE jetton = ? ORDER BY created_at DESC LIMIT ?')
+    .all(jetton, limit);
+  return rows.map((r) => ({
+    id: r.id,
+    created_at: r.created_at,
+    holders_count: r.holders_count,
+    top1_share: r.top1_share,
+    top10_share: r.top10_share,
+    signals: safeParseJson(r.signals_json, []),
+  }));
+}
+
+// --- Wallets (user-managed registry) ---
+
+function getWallet(db, address) {
+  const row = db.prepare('SELECT * FROM wallets WHERE address = ?').get(address);
+  if (!row) return null;
+  return { ...row, tags: safeParseJson(row.tags, []) };
+}
+
+// Bulk variant — returns Map<address, walletRow>. Missing addresses are absent from the map.
+function getWallets(db, addresses) {
+  const list = Array.from(new Set((addresses || []).filter((a) => typeof a === 'string' && a)));
+  if (list.length === 0) return new Map();
+  const placeholders = list.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT * FROM wallets WHERE address IN (${placeholders})`).all(...list);
+  const out = new Map();
+  for (const r of rows) out.set(r.address, { ...r, tags: safeParseJson(r.tags, []) });
+  return out;
+}
+
+function upsertWallet(db, { address, label, notes, tags }) {
+  const now = Math.floor(Date.now() / 1000);
+  const tagsJson = JSON.stringify(Array.isArray(tags) ? tags : []);
+  const stmt = db.prepare(`
+    INSERT INTO wallets (address, label, notes, tags, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(address) DO UPDATE SET
+      label      = excluded.label,
+      notes      = excluded.notes,
+      tags       = excluded.tags,
+      updated_at = excluded.updated_at
+  `);
+  stmt.run(address, label ?? null, notes ?? null, tagsJson, now, now);
+  return getWallet(db, address);
+}
+
+// --- Wallet links (relationships between addresses) ---
+
+function listWalletLinks(db, address) {
+  const out = db
+    .prepare('SELECT id, from_addr, to_addr, kind, notes, created_at FROM wallet_links WHERE from_addr = ? ORDER BY created_at DESC')
+    .all(address);
+  const inc = db
+    .prepare('SELECT id, from_addr, to_addr, kind, notes, created_at FROM wallet_links WHERE to_addr = ? ORDER BY created_at DESC')
+    .all(address);
+  return { outgoing: out, incoming: inc };
+}
+
+function upsertWalletLink(db, { from_addr, to_addr, kind, notes }) {
+  const now = Math.floor(Date.now() / 1000);
+  const stmt = db.prepare(`
+    INSERT INTO wallet_links (from_addr, to_addr, kind, notes, created_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(from_addr, to_addr, kind) DO UPDATE SET
+      notes = excluded.notes
+  `);
+  stmt.run(from_addr, to_addr, kind, notes ?? null, now);
+  return db
+    .prepare('SELECT id, from_addr, to_addr, kind, notes, created_at FROM wallet_links WHERE from_addr = ? AND to_addr = ? AND kind = ?')
+    .get(from_addr, to_addr, kind);
+}
+
+function deleteWalletLink(db, id) {
+  const info = db.prepare('DELETE FROM wallet_links WHERE id = ?').run(Number(id));
+  return info.changes > 0;
+}
+
+// --- internals ---
+
+function safeParseJson(s, fallback) {
+  if (s == null) return fallback;
+  try { return JSON.parse(s); } catch { return fallback; }
+}
+
 module.exports = {
   openDb,
   runMigrations,
@@ -132,4 +238,12 @@ module.exports = {
   recordAnalysis,
   getDeveloper,
   listJettonsByDeployer,
+  recordLookup,
+  getLookupHistory,
+  getWallet,
+  getWallets,
+  upsertWallet,
+  listWalletLinks,
+  upsertWalletLink,
+  deleteWalletLink,
 };

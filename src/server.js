@@ -9,7 +9,9 @@ const { openDb, runMigrations } = require('./db');
 const { makeTonApiClient } = require('./lib/tonapi');
 const { makeRateLimiter } = require('./lib/rate-limit');
 const { logger, requestLogger } = require('./lib/logger');
+const { makeAdminAuth } = require('./lib/auth');
 const buildRoutes = require('./routes');
+const buildAdminWalletRouter = require('./routes/admin/wallet');
 
 const PORT = Number(process.env.PORT || 3031);
 const BASE_PATH = normalizeBasePath(process.env.BASE_PATH || '/explorer');
@@ -17,6 +19,7 @@ const TRUST_PROXY = process.env.TRUST_PROXY || 'loopback';
 const NETWORK = (process.env.TON_NETWORK || 'mainnet').toLowerCase();
 const SQLITE_PATH = process.env.SQLITE_PATH || 'data/explorer.sqlite';
 const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN || `http://localhost:${PORT}`;
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
 const pkg = require('../package.json');
 const STARTED_AT = Date.now();
@@ -43,8 +46,12 @@ async function main() {
 
   app.use(requestLogger(logger));
 
-  // Read-only API — only GET is allowed.
+  const ADMIN_PREFIX = `${BASE_PATH}/api/admin`;
+
+  // Public API is read-only — GET/HEAD/OPTIONS only. The admin subtree under
+  // /api/admin is exempt and gated by Bearer-token auth instead.
   app.use((req, res, next) => {
+    if (req.path.startsWith(ADMIN_PREFIX + '/') || req.path === ADMIN_PREFIX) return next();
     if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
     res.status(405).json({ ok: false, error: { code: 'method_not_allowed', message: 'GET only' } });
   });
@@ -76,6 +83,10 @@ async function main() {
     },
   };
 
+  // Admin mounted BEFORE the public router so its path takes precedence.
+  // Auth middleware fail-closes when ADMIN_TOKEN is empty (503 admin_disabled).
+  app.use(ADMIN_PREFIX, makeAdminAuth({ token: ADMIN_TOKEN }), buildAdminWalletRouter(ctx));
+
   const router = buildRoutes(ctx);
   app.use(`${BASE_PATH}/api`, rateLimit, router);
 
@@ -103,7 +114,11 @@ async function main() {
       port: PORT,
       base_path: BASE_PATH || '/',
       network: NETWORK,
+      admin_enabled: ADMIN_TOKEN ? true : false,
     });
+    if (!ADMIN_TOKEN) {
+      logger.warn('admin disabled', { reason: 'ADMIN_TOKEN is empty — /api/admin/* returns 503' });
+    }
   });
 }
 
