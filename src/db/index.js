@@ -345,6 +345,49 @@ function getTradesBetween(db, poolAddress, fromTs, toTs) {
     .all(poolAddress, Number(fromTs), Number(toTs));
 }
 
+// Recomputes `price_native` for trades in this pool that were inserted with
+// price_native = NULL — usually because the pool row didn't have base_decimals
+// at the time (DeDust's bulk /v2/pools sometimes returns null metadata for the
+// non-TON side, so `normalizeDedustTrade` couldn't scale the amounts). Once
+// the pool row is enriched (e.g. via a TonAPI fallback), call this once to
+// retroactively fill in prices so the candle builder can use them.
+//
+// Returns the number of rows updated.
+function backfillTradePrices(db, poolRow) {
+  if (!poolRow || poolRow.base_decimals == null || poolRow.quote_decimals == null) return 0;
+  const rows = db
+    .prepare(`
+      SELECT pool_address, lt, side, amount_in, amount_out
+      FROM trades
+      WHERE pool_address = ? AND price_native IS NULL
+    `)
+    .all(poolRow.pool_address);
+  if (rows.length === 0) return 0;
+  const upd = db.prepare('UPDATE trades SET price_native = ? WHERE pool_address = ? AND lt = ?');
+  const scale = 10 ** (poolRow.base_decimals - poolRow.quote_decimals);
+  let updated = 0;
+  const tx = db.transaction(() => {
+    for (const r of rows) {
+      try {
+        const aIn  = BigInt(r.amount_in);
+        const aOut = BigInt(r.amount_out);
+        if (aIn <= 0n || aOut <= 0n) continue;
+        // For a buy:  amount_in is in quote, amount_out is in base.
+        // For a sell: amount_in is in base,  amount_out is in quote.
+        const quoteUnits = r.side === 'buy' ? aIn  : aOut;
+        const baseUnits  = r.side === 'buy' ? aOut : aIn;
+        const price = (Number(quoteUnits) / Number(baseUnits)) * scale;
+        if (Number.isFinite(price) && price > 0) {
+          upd.run(price, r.pool_address, r.lt);
+          updated++;
+        }
+      } catch { /* skip unparseable */ }
+    }
+  });
+  tx();
+  return updated;
+}
+
 // Returns a Set<string> of input addresses that are present in the
 // trading_pools table — used by the analyzers to recognise LP pool wallets
 // without polluting the user-managed `wallets` table.
@@ -413,4 +456,5 @@ module.exports = {
   getSyncState,
   setSyncState,
   selectKnownPoolAddresses,
+  backfillTradePrices,
 };

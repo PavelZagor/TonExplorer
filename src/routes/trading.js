@@ -10,9 +10,53 @@ const {
   getTradingPool,
   getSyncState,
   setSyncState,
+  backfillTradePrices,
 } = require('../db');
 const { normalizeDedustTrade } = require('../services/trade-parser');
 const { buildCandles, intervalSeconds, INTERVAL_PRESETS } = require('../services/candle-builder');
+
+// If the pool row is missing decimals (DeDust's bulk /v2/pools returns null
+// metadata for many jettons), fetch them from TonAPI and persist. Once we have
+// them, retroactively recompute price_native for any trades that landed in
+// the table with NULL while decimals were missing — otherwise the candle
+// builder skips every trade and the chart stays empty.
+async function ensurePoolDecimals(ctx, poolRow, log) {
+  if (!poolRow || (poolRow.base_decimals != null && poolRow.quote_decimals != null)) return poolRow;
+  const { db, tonapi } = ctx;
+  let baseDec = poolRow.base_decimals;
+  let quoteDec = poolRow.quote_decimals;
+
+  if (baseDec == null && poolRow.jetton_master) {
+    try {
+      const j = await tonapi.getJetton(poolRow.jetton_master);
+      if (j?.metadata?.decimals != null) baseDec = Number(j.metadata.decimals);
+    } catch (err) {
+      log?.warn?.('ensurePoolDecimals: tonapi.getJetton failed (base)', { jetton: poolRow.jetton_master, err: err.message });
+    }
+  }
+  if (quoteDec == null) {
+    if (poolRow.paired_with === 'TON') quoteDec = 9;
+    else {
+      try {
+        const j = await tonapi.getJetton(poolRow.paired_with);
+        if (j?.metadata?.decimals != null) quoteDec = Number(j.metadata.decimals);
+      } catch (err) {
+        log?.warn?.('ensurePoolDecimals: tonapi.getJetton failed (quote)', { jetton: poolRow.paired_with, err: err.message });
+      }
+    }
+  }
+
+  if (baseDec === poolRow.base_decimals && quoteDec === poolRow.quote_decimals) return poolRow;
+
+  const updated = upsertTradingPool(db, {
+    ...poolRow,
+    base_decimals: baseDec,
+    quote_decimals: quoteDec,
+  });
+  const backfilled = backfillTradePrices(db, updated);
+  if (backfilled > 0 && log) log.info?.('pool decimals enriched + prices backfilled', { pool: updated.pool_address, backfilled, base_decimals: baseDec, quote_decimals: quoteDec });
+  return updated;
+}
 
 const POOL_PREVIEW_LIMIT = 10;
 
@@ -63,6 +107,23 @@ function infoHandler(ctx) {
         totalPools++;
       } catch (err) {
         (req.log || logger)?.warn('upsertTradingPool failed', { pool: p.pool_address, err: err.message });
+      }
+    }
+
+    // Enrich the primary pool's decimals via TonAPI when DeDust left them
+    // null. This is best-effort and only runs for the primary pool — that's
+    // the one the trading page will hit for trades/candles. Non-primary pools
+    // will be enriched on demand when they're addressed via ?pool=.
+    if (detection.primary && persistedPools.length > 0) {
+      const primaryRow = persistedPools.find((p) => p.pool_address === detection.primary.pool);
+      if (primaryRow) {
+        try {
+          const enriched = await ensurePoolDecimals(ctx, primaryRow, req.log || logger);
+          const idx = persistedPools.indexOf(primaryRow);
+          if (idx >= 0) persistedPools[idx] = enriched;
+        } catch (err) {
+          (req.log || logger)?.warn('ensurePoolDecimals failed', { err: err.message });
+        }
       }
     }
 
@@ -123,6 +184,11 @@ function tradesHandler(ctx) {
       }
       poolRow = getTradingPool(db, detection.primary.pool);
     }
+
+    // Make sure decimals are present before we normalise + persist trades —
+    // otherwise price_native lands as NULL and the chart stays empty forever.
+    try { poolRow = await ensurePoolDecimals(ctx, poolRow, req.log); }
+    catch (err) { req.log?.warn('ensurePoolDecimals failed', { err: err.message }); }
 
     // Refresh from DeDust. Only refresh on no-`before` (newest page) — when the
     // user is scrolling backwards we already have the older trades cached.
@@ -256,6 +322,11 @@ function candlesHandler(ctx) {
       }
       poolRow = getTradingPool(db, detection.primary.pool);
     }
+
+    // Ensure decimals — also retroactively backfills price_native on any
+    // existing trades for this pool that landed with NULL.
+    try { poolRow = await ensurePoolDecimals(ctx, poolRow, req.log); }
+    catch (err) { req.log?.warn('ensurePoolDecimals failed', { err: err.message }); }
 
     const rows = getTradesBetween(db, poolRow.pool_address, fromTs, toTs);
     const series = buildCandles(rows, ivl, { quoteDecimals: poolRow.quote_decimals ?? null });

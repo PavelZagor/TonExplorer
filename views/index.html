@@ -597,6 +597,20 @@
       if (!editOverlay.classList.contains('hidden')) closeEdit();
       else if (!settingsOverlay.classList.contains('hidden')) settingsOverlay.classList.add('hidden');
     });
+
+    // --- boot from URL ------------------------------------------------------
+    // The trading page (and any external link / bookmark) can deep-link into
+    // an analysis via ?address=<raw or friendly>. Pre-fill the input and
+    // analyse immediately so the user doesn't land on a blank page.
+    (function bootFromQuery() {
+      try {
+        const params = new URLSearchParams(location.search);
+        const addr = (params.get('address') || '').trim();
+        if (!addr) return;
+        addrInput.value = addr;
+        analyze();
+      } catch { /* ignore malformed query string */ }
+    })();
   </script>
 </body>
 </html>
