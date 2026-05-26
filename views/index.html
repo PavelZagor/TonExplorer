@@ -296,8 +296,50 @@
       if (body.ok) { currentData = body.data; render(currentData); }
     }
 
+    function renderTradingCard(tr, t) {
+      if (!tr) return '';
+      const tradeUrl = tr.url || null;
+      if (!tr.dexes || tr.dexes.length === 0) {
+        return `
+          <div class="bg-slate-900/60 border border-slate-800 rounded-lg p-4">
+            <h3 class="font-semibold mb-2">📈 Trading</h3>
+            <p class="text-sm text-slate-400">Not listed on tracked DEXes (DeDust, STON.fi).</p>
+          </div>
+        `;
+      }
+      const badgeFor = (dex) => {
+        const cls = dex === 'dedust' ? 'bg-emerald-900/40 border-emerald-700 text-emerald-200'
+                  : dex === 'stonfi' ? 'bg-cyan-900/40 border-cyan-700 text-cyan-200'
+                  : 'bg-slate-800 border-slate-600 text-slate-300';
+        return `<span class="inline-block text-[10px] uppercase tracking-wider px-2 py-1 rounded border ${cls}">${escapeHtml(dex)}</span>`;
+      };
+      const pair = tr.paired_with === 'TON' ? 'TON' : (tr.paired_with ? 'jetton' : '');
+      const dexBadges = tr.dexes.map(badgeFor).join(' ');
+      const primaryLine = tr.primary_pool
+        ? `<p class="mono text-[11px] text-slate-500 mt-2 truncate-addr" title="${escapeHtml(tr.primary_pool)}">primary pool · ${shortAddr(tr.primary_pool)}${pair ? ` · paired with ${escapeHtml(pair)}` : ''}</p>`
+        : '';
+      const viewBtn = tradeUrl
+        ? `<a href="${escapeHtml(tradeUrl)}" class="inline-block text-sm bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded">View live trades →</a>`
+        : '';
+      return `
+        <div class="bg-slate-900/60 border border-slate-800 rounded-lg p-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <h3 class="font-semibold mb-2">📈 Trading</h3>
+              <div class="flex flex-wrap items-center gap-2 text-sm">
+                <span class="text-slate-400">Listed on:</span>${dexBadges}
+              </div>
+              ${primaryLine}
+            </div>
+            ${viewBtn}
+          </div>
+        </div>
+      `;
+    }
+
     function render(data) {
       const t = data.token, d = data.developer, h = data.holders, v = data.verdict;
+      const tr = data.trading || null;
       const rf = data.resolved_from || null;
 
       const resolvedBanner = rf ? `
@@ -380,6 +422,8 @@
             <div class="mt-3 flex flex-wrap gap-2">${signalBadges || '<span class="text-xs text-slate-500">no signals</span>'}</div>
           </div>
         </div>
+
+        ${renderTradingCard(tr, t)}
 
         <div class="bg-slate-900/60 border border-slate-800 rounded-lg p-4">
           <h3 class="font-semibold mb-3">Top holders</h3>

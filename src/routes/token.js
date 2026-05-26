@@ -12,7 +12,7 @@ const {
 const { buildDeveloperCard } = require('../analyzers/developer');
 const { pickTopHolders, concentrationFlags } = require('../analyzers/holders');
 
-module.exports = function tokenRoute({ tonapi, db }) {
+module.exports = function tokenRoute({ tonapi, db, dexDetection, config }) {
   return async function token(req, res) {
     const input = req.params.address;
     if (!isValid(input)) {
@@ -129,6 +129,27 @@ module.exports = function tokenRoute({ tonapi, db }) {
       top: holders.top.map((h) => ({ ...h, wallet: labelOf(h.address) })),
     };
 
+    // Trading availability — best-effort, never block the analysis on this.
+    // Empty `dexes` is a perfectly valid answer ("not listed on tracked DEXes").
+    let trading = { dexes: [], primary_pool: null, primary_dex: null, paired_with: null, url: null };
+    if (dexDetection) {
+      try {
+        const detection = await dexDetection.detectDexes(raw);
+        const dexes = [];
+        if (detection.dedust.pools.length > 0) dexes.push('dedust');
+        if (detection.stonfi.pools.length > 0) dexes.push('stonfi');
+        trading = {
+          dexes,
+          primary_pool: detection.primary?.pool || null,
+          primary_dex:  detection.primary?.dex  || null,
+          paired_with:  detection.primary?.paired_with || null,
+          url: dexes.length ? `${config?.basePath || ''}/trading/${raw}` : null,
+        };
+      } catch (err) {
+        req.log?.warn('dex-detection failed (non-fatal)', { jetton: raw, err: err.message });
+      }
+    }
+
     res.json({
       ok: true,
       data: {
@@ -151,6 +172,7 @@ module.exports = function tokenRoute({ tonapi, db }) {
         developer: buildDeveloperCard(devRow),
         holders: decoratedHolders,
         verdict,
+        trading,
       },
     });
   };
