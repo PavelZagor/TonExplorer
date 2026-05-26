@@ -107,7 +107,13 @@ async function main() {
   // Static views — inject BASE_PATH into the HTML so the frontend uses the right prefix.
   app.get([`${BASE_PATH}/`, `${BASE_PATH}`], (req, res) => {
     res.set('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderIndex(BASE_PATH));
+    res.send(renderTemplate('index.html', BASE_PATH));
+  });
+
+  // Trading page. The :address segment is read on the client from location.pathname.
+  app.get(`${BASE_PATH}/trading/:address`, (req, res) => {
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(renderTemplate('trading.html', BASE_PATH));
   });
 
   app.use(`${BASE_PATH}/static`, express.static(path.join(__dirname, '..', 'views', 'static')));
@@ -136,9 +142,9 @@ async function main() {
   });
 }
 
-function renderIndex(basePath) {
+function renderTemplate(name, basePath) {
   const fs = require('fs');
-  const tmpl = fs.readFileSync(path.join(__dirname, '..', 'views', 'index.html'), 'utf8');
+  const tmpl = fs.readFileSync(path.join(__dirname, '..', 'views', name), 'utf8');
   return tmpl.replace(/__BASE_PATH__/g, basePath);
 }
 

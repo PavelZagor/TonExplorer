@@ -1,0 +1,770 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="base-path" content="__BASE_PATH__" />
+  <title>TonExplorer — Trading</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .truncate-addr { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Custom scrollbar for the trades table on dark theme. */
+    .trades-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+    .trades-scroll::-webkit-scrollbar-thumb { background: rgb(51 65 85); border-radius: 4px; }
+    .trades-scroll::-webkit-scrollbar-track { background: transparent; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <header class="border-b border-slate-800">
+    <div class="max-w-6xl mx-auto px-4 py-5 flex items-center justify-between">
+      <div class="flex items-center gap-4">
+        <a id="back-link" class="text-sm text-slate-400 hover:text-slate-200" href="#">← Back to token</a>
+        <div>
+          <h1 class="text-xl font-semibold">TonExplorer <span class="text-slate-500 font-normal">· Trading</span></h1>
+          <p class="text-xs text-slate-400">Candle chart and live trade feed. <span class="text-slate-500">v0.1</span></p>
+        </div>
+      </div>
+      <div class="flex items-center gap-4">
+        <!--
+          Live indicator dot.
+          Wired in step 6 (WebSocket stream). For now: REST-only, stays gray.
+          When step 6 lands, flip class to: bg-emerald-500 animate-pulse
+          and update the title attribute.
+        -->
+        <span class="flex items-center gap-2 text-xs text-slate-400">
+          <span id="live-dot" class="inline-block w-2.5 h-2.5 rounded-full bg-slate-500" title="REST-only (live stream not wired yet)"></span>
+          <span id="live-label">offline</span>
+        </span>
+        <a class="text-sm text-slate-400 hover:text-slate-200" href="https://github.com/PavelZagor/TonExplorer" target="_blank" rel="noopener">GitHub →</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 py-6 space-y-4">
+    <!-- Top-level upstream banner (DeDust down, etc.). Hidden by default. -->
+    <div id="upstream-banner" class="hidden bg-amber-900/30 border border-amber-700 rounded-lg p-3 text-sm text-amber-200">
+      <span id="upstream-banner-text">DeDust upstream unreachable — showing cached data.</span>
+    </div>
+
+    <!-- Loading placeholder. -->
+    <div id="loading" class="bg-slate-900/60 border border-slate-800 rounded-lg p-6 text-sm text-slate-400">
+      Loading trading data…
+    </div>
+
+    <!-- Hard error / empty state. -->
+    <div id="empty-state" class="hidden bg-slate-900/60 border border-slate-800 rounded-lg p-6">
+      <h2 id="empty-title" class="font-semibold text-lg">—</h2>
+      <p id="empty-body" class="text-sm text-slate-400 mt-2">—</p>
+      <a id="empty-link" class="inline-block mt-4 text-sm text-emerald-400 hover:text-emerald-300" href="#">← Back to token analysis</a>
+    </div>
+
+    <!-- Token header card. -->
+    <section id="token-card" class="hidden bg-slate-900/60 border border-slate-800 rounded-lg p-4">
+      <div class="flex items-start justify-between gap-3 flex-wrap">
+        <div class="flex items-baseline gap-3 flex-wrap">
+          <h2 id="ticker" class="text-2xl font-bold">$—</h2>
+          <span id="dex-badge" class="text-xs px-2 py-1 rounded border bg-emerald-900/40 border-emerald-700 text-emerald-200">on DeDust</span>
+          <span id="token-name" class="text-sm text-slate-400"></span>
+        </div>
+        <div class="flex items-center gap-2 text-xs">
+          <span id="token-addr" class="mono text-slate-400 truncate-addr" title=""></span>
+          <button id="copy-addr" class="text-slate-500 hover:text-emerald-400 px-1" title="Copy address">⧉</button>
+        </div>
+      </div>
+      <dl id="stat-grid" class="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4 text-sm">
+        <div>
+          <dt class="text-xs text-slate-400">Primary pool</dt>
+          <dd id="stat-pool" class="mono text-xs">—</dd>
+        </div>
+        <div>
+          <dt class="text-xs text-slate-400">Pool reserves</dt>
+          <dd id="stat-reserves">—</dd>
+        </div>
+        <div>
+          <dt class="text-xs text-slate-400">Trade fee</dt>
+          <dd id="stat-fee">—</dd>
+        </div>
+        <div>
+          <dt class="text-xs text-slate-400">Latest price</dt>
+          <dd id="stat-price" class="mono">—</dd>
+        </div>
+        <div>
+          <dt class="text-xs text-slate-400">DEX pools</dt>
+          <dd id="stat-poolcount" class="text-xs text-slate-400">—</dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- Chart card. -->
+    <section id="chart-card" class="hidden bg-slate-900/60 border border-slate-800 rounded-lg p-4">
+      <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+        <h3 class="font-semibold">Price</h3>
+        <div id="interval-pills" class="flex flex-wrap gap-1">
+          <!-- Filled by JS. -->
+        </div>
+      </div>
+      <div id="chart-wrap" class="relative">
+        <div id="chart" style="height: 360px;"></div>
+        <div id="chart-empty" class="hidden absolute inset-0 flex items-center justify-center text-sm text-slate-500">
+          No trades in the selected window.
+        </div>
+      </div>
+    </section>
+
+    <!-- Trades card. -->
+    <section id="trades-card" class="hidden bg-slate-900/60 border border-slate-800 rounded-lg p-4">
+      <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+        <div class="flex items-center gap-3 flex-wrap">
+          <h3 class="font-semibold">Trades</h3>
+          <span id="trades-count" class="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300">0</span>
+        </div>
+        <span id="trades-sync" class="text-xs text-slate-500">—</span>
+      </div>
+      <div class="trades-scroll overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="text-xs text-slate-400">
+            <tr class="text-left">
+              <th class="pb-2 pr-3 font-normal">Time</th>
+              <th class="pb-2 pr-3 font-normal">Type</th>
+              <th class="pb-2 pr-3 font-normal text-right">Amount</th>
+              <th class="pb-2 pr-3 font-normal text-right">Value</th>
+              <th class="pb-2 pr-3 font-normal text-right">Price</th>
+              <th class="pb-2 pr-3 font-normal">Trader</th>
+            </tr>
+          </thead>
+          <tbody id="trades-tbody"></tbody>
+        </table>
+      </div>
+      <div class="mt-3 flex justify-center">
+        <button id="load-older" class="text-sm bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded disabled:opacity-50">
+          Load older
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    // ---------------------------------------------------------------------------
+    // BASE_PATH plumbing — same pattern as views/index.html.
+    // The server replaces the __BASE_PATH__ literal in this file at render time.
+    // Do NOT hardcode '/explorer' — production may be mounted elsewhere.
+    // ---------------------------------------------------------------------------
+    const BASE = (document.querySelector('meta[name="base-path"]').content || '').replace(/\/$/, '');
+
+    // ---------------------------------------------------------------------------
+    // DOM handles.
+    // ---------------------------------------------------------------------------
+    const $ = (sel) => document.querySelector(sel);
+    const loadingEl = $('#loading');
+    const emptyEl = $('#empty-state');
+    const emptyTitle = $('#empty-title');
+    const emptyBody = $('#empty-body');
+    const emptyLink = $('#empty-link');
+    const backLink = $('#back-link');
+    const upstreamBanner = $('#upstream-banner');
+    const upstreamText = $('#upstream-banner-text');
+    const tokenCard = $('#token-card');
+    const chartCard = $('#chart-card');
+    const tradesCard = $('#trades-card');
+    const intervalPills = $('#interval-pills');
+    const chartDiv = $('#chart');
+    const chartEmpty = $('#chart-empty');
+    const tradesBody = $('#trades-tbody');
+    const tradesCount = $('#trades-count');
+    const tradesSync = $('#trades-sync');
+    const loadOlderBtn = $('#load-older');
+
+    // ---------------------------------------------------------------------------
+    // Page state.
+    // ---------------------------------------------------------------------------
+    const INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d'];
+    const INTERVAL_SECONDS = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400 };
+
+    const state = {
+      addr: null,                // raw or friendly address parsed from URL
+      tokenData: null,           // /api/token response data
+      info: null,                // /api/trading/:addr/info data
+      pool: null,                // info.primary pool object expanded from pools[]
+      trades: [],                // accumulated trades, newest-first
+      oldestTs: null,            // smallest ts seen — used for "load older"
+      interval: '1h',
+      chart: null,
+      candleSeries: null,
+      volumeSeries: null,
+      quoteSymbol: 'TON',        // display symbol of the paired-with side
+      baseSymbol: 'tokens',      // display symbol of the jetton
+      baseDecimals: 9,
+      quoteDecimals: 9,
+    };
+
+    // ---------------------------------------------------------------------------
+    // Helpers.
+    // ---------------------------------------------------------------------------
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    function shortAddr(a) {
+      if (!a) return '—';
+      if (a.length <= 14) return a;
+      return a.slice(0, 6) + '…' + a.slice(-4);
+    }
+
+    function formatRelativeTime(ts) {
+      if (!ts) return '—';
+      const now = Math.floor(Date.now() / 1000);
+      const diff = now - Number(ts);
+      if (diff < 0) return 'in the future';
+      if (diff < 5) return 'just now';
+      if (diff < 60) return diff + 's ago';
+      if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+      if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+      if (diff < 172800) return 'yesterday';
+      if (diff < 604800) return Math.floor(diff / 86400) + 'd ago';
+      return new Date(Number(ts) * 1000).toISOString().slice(0, 10);
+    }
+
+    // BigInt-safe scale-down to a JS number for *display only*.
+    // Lossy past ~9 quadrillion — that's fine for UI labels, NEVER use this
+    // result for math that gets persisted server-side.
+    function scaleToNumber(rawStr, decimals) {
+      if (rawStr == null) return null;
+      try {
+        const big = BigInt(rawStr);
+        const denom = BigInt(10) ** BigInt(decimals);
+        // Compute integer + fractional parts separately to keep precision in the
+        // typical small-number range.
+        const intPart = big / denom;
+        const fracPart = big % denom;
+        const intNum = Number(intPart);
+        const fracNum = Number(fracPart) / Number(denom);
+        return intNum + fracNum;
+      } catch {
+        return null;
+      }
+    }
+
+    function formatNumber(n, opts = {}) {
+      if (n == null || !isFinite(n)) return '—';
+      const { maxFrac = 6, minFrac = 2 } = opts;
+      if (Math.abs(n) >= 1000) {
+        return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+      }
+      if (Math.abs(n) >= 1) {
+        return n.toLocaleString('en-US', { maximumFractionDigits: Math.min(maxFrac, 4), minimumFractionDigits: minFrac });
+      }
+      return n.toLocaleString('en-US', { maximumFractionDigits: maxFrac, minimumFractionDigits: 0 });
+    }
+
+    function setLoading(on) { loadingEl.classList.toggle('hidden', !on); }
+
+    function showEmptyState(title, body, backHref) {
+      setLoading(false);
+      tokenCard.classList.add('hidden');
+      chartCard.classList.add('hidden');
+      tradesCard.classList.add('hidden');
+      emptyTitle.textContent = title;
+      emptyBody.textContent = body;
+      emptyLink.href = backHref;
+      emptyEl.classList.remove('hidden');
+    }
+
+    function showUpstreamBanner(msg) {
+      upstreamText.textContent = msg || 'DeDust upstream unreachable — showing cached data.';
+      upstreamBanner.classList.remove('hidden');
+    }
+
+    async function fetchJson(url) {
+      const r = await fetch(url);
+      let body = null;
+      try { body = await r.json(); } catch { /* non-JSON */ }
+      return { status: r.status, ok: r.ok, body };
+    }
+
+    // ---------------------------------------------------------------------------
+    // Address extraction. URL shape: /explorer/trading/:address
+    // ---------------------------------------------------------------------------
+    function parseAddressFromPath() {
+      const path = window.location.pathname.replace(/\/$/, '');
+      const segs = path.split('/').filter(Boolean);
+      // The last segment is the address. URL-decode in case of friendly forms
+      // with potentially escaped chars (defensive — TON friendly addrs are URL-safe).
+      const last = segs[segs.length - 1] || '';
+      try { return decodeURIComponent(last); } catch { return last; }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Renderers.
+    // ---------------------------------------------------------------------------
+    function renderTokenCard() {
+      const t = state.tokenData.token;
+      const info = state.info;
+      const pool = state.pool;
+
+      const symbol = t.symbol || '???';
+      $('#ticker').textContent = '$' + symbol;
+      $('#token-name').textContent = t.name ? '· ' + t.name : '';
+      $('#token-addr').textContent = t.address;
+      $('#token-addr').title = t.address;
+
+      const dexBadge = $('#dex-badge');
+      if (info && info.dexes && info.dexes.length) {
+        const dexNames = info.dexes.map((d) => d === 'dedust' ? 'DeDust' : d === 'stonfi' ? 'STON.fi' : d).join(', ');
+        dexBadge.textContent = 'on ' + dexNames;
+        dexBadge.className = 'text-xs px-2 py-1 rounded border bg-emerald-900/40 border-emerald-700 text-emerald-200';
+      } else {
+        dexBadge.textContent = 'Not listed';
+        dexBadge.className = 'text-xs px-2 py-1 rounded border bg-slate-800 border-slate-700 text-slate-400';
+      }
+
+      // Pool address + tonviewer link.
+      const poolEl = $('#stat-pool');
+      if (pool && pool.address) {
+        poolEl.innerHTML = `<a href="https://tonviewer.com/${encodeURIComponent(pool.address)}" target="_blank" rel="noopener" class="hover:text-emerald-300" title="${escapeHtml(pool.address)}">${escapeHtml(shortAddr(pool.address))} ↗</a>`;
+      } else {
+        poolEl.textContent = '—';
+      }
+
+      // Pool reserves — show the quote-side reserve (TON for TON pairs).
+      const reservesEl = $('#stat-reserves');
+      if (pool && pool.reserve_quote != null) {
+        const reserveQuote = scaleToNumber(pool.reserve_quote, pool.quote_decimals ?? 9);
+        const quoteLabel = pool.paired_with === 'TON' ? 'TON' : 'tokens';
+        reservesEl.textContent = formatNumber(reserveQuote, { maxFrac: 2, minFrac: 0 }) + ' ' + quoteLabel;
+      } else {
+        reservesEl.textContent = '—';
+      }
+
+      // Trade fee.
+      const feeEl = $('#stat-fee');
+      if (pool && pool.trade_fee_bps != null) {
+        feeEl.textContent = (pool.trade_fee_bps / 100).toFixed(2) + '%';
+      } else {
+        feeEl.textContent = '—';
+      }
+
+      // Latest price — derived from the most recent trade after we fetch them.
+      // Initial placeholder; filled after trades load.
+      const priceEl = $('#stat-price');
+      const latestTrade = state.trades.find((tr) => tr.price_native != null);
+      if (latestTrade && latestTrade.price_native != null) {
+        const quoteLabel = state.quoteSymbol;
+        priceEl.textContent = Number(latestTrade.price_native).toFixed(6) + ' ' + quoteLabel + ' / ' + state.baseSymbol;
+      } else {
+        priceEl.textContent = '—';
+      }
+
+      // Pool count.
+      const pcEl = $('#stat-poolcount');
+      if (info && info.pool_count > 1) {
+        pcEl.textContent = info.pool_count.toLocaleString() + ' pools on DeDust';
+      } else if (info && info.pool_count === 1) {
+        pcEl.textContent = '1 pool';
+      } else {
+        pcEl.textContent = '—';
+      }
+
+      tokenCard.classList.remove('hidden');
+    }
+
+    function renderIntervalPills() {
+      intervalPills.innerHTML = INTERVALS.map((iv) => {
+        const selected = iv === state.interval;
+        const cls = selected
+          ? 'bg-emerald-600 text-white'
+          : 'bg-slate-800 text-slate-300 hover:bg-slate-700';
+        return `<button type="button" data-interval="${iv}" class="text-xs px-2.5 py-1 rounded ${cls}">${iv}</button>`;
+      }).join('');
+    }
+    intervalPills.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-interval]');
+      if (!b) return;
+      const iv = b.dataset.interval;
+      if (iv === state.interval) return;
+      state.interval = iv;
+      renderIntervalPills();
+      loadCandles().catch((err) => console.error('candles reload failed', err));
+    });
+
+    function ensureChart() {
+      if (state.chart) return;
+      const chart = LightweightCharts.createChart(chartDiv, {
+        width: chartDiv.clientWidth,
+        height: 360,
+        layout: {
+          background: { type: 'solid', color: 'transparent' },
+          textColor: '#cbd5e1',
+        },
+        grid: {
+          vertLines: { color: 'rgba(148,163,184,0.1)' },
+          horzLines: { color: 'rgba(148,163,184,0.1)' },
+        },
+        rightPriceScale: { borderColor: 'rgba(148,163,184,0.2)' },
+        timeScale: { borderColor: 'rgba(148,163,184,0.2)', timeVisible: true, secondsVisible: false },
+        crosshair: { mode: 1 },
+      });
+      const candle = chart.addCandlestickSeries({
+        upColor: '#10b981',          // emerald-500
+        borderUpColor: '#10b981',
+        wickUpColor: '#10b981',
+        downColor: '#f87171',        // red-400
+        borderDownColor: '#f87171',
+        wickDownColor: '#f87171',
+      });
+      const volume = chart.addHistogramSeries({
+        priceFormat: { type: 'volume' },
+        priceScaleId: '',
+        color: 'rgba(100,116,139,0.5)',
+      });
+      // Place volume in the bottom 25% of the chart pane.
+      volume.priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } });
+      candle.priceScale().applyOptions({ scaleMargins: { top: 0.05, bottom: 0.3 } });
+
+      state.chart = chart;
+      state.candleSeries = candle;
+      state.volumeSeries = volume;
+
+      window.addEventListener('resize', () => {
+        if (state.chart) state.chart.applyOptions({ width: chartDiv.clientWidth });
+      });
+    }
+
+    function setCandleData(candles) {
+      ensureChart();
+      const cData = candles.map((c) => ({
+        time: c.time,
+        open: c.open, high: c.high, low: c.low, close: c.close,
+      }));
+      const vData = candles.map((c) => ({
+        time: c.time,
+        value: c.volume,
+        color: c.close >= c.open ? 'rgba(16,185,129,0.5)' : 'rgba(248,113,113,0.5)',
+      }));
+      state.candleSeries.setData(cData);
+      state.volumeSeries.setData(vData);
+      if (candles.length) {
+        chartEmpty.classList.add('hidden');
+        state.chart.timeScale().fitContent();
+      } else {
+        chartEmpty.classList.remove('hidden');
+      }
+    }
+
+    function renderTrades() {
+      const trades = state.trades;
+      tradesCount.textContent = trades.length.toLocaleString();
+      if (state.info && state.info.primary) {
+        // Sync timestamp is from the trades response — track separately.
+      }
+      tradesBody.innerHTML = trades.map((tr) => tradeRow(tr)).join('');
+    }
+
+    function tradeRow(tr) {
+      const isBuy = tr.side === 'buy';
+      const sideClass = isBuy
+        ? 'bg-emerald-900/40 border-emerald-700 text-emerald-200'
+        : 'bg-red-900/40 border-red-700 text-red-200';
+      const sideLabel = isBuy ? 'buy' : 'sell';
+
+      // Amounts: jetton (base) vs paired (quote).
+      // For a buy, jetton flows TO trader: amount_out is the jetton, amount_in is the paid asset.
+      // For a sell, jetton flows FROM trader: amount_in is the jetton, amount_out is the received asset.
+      const baseRaw  = isBuy ? tr.amount_out : tr.amount_in;
+      const quoteRaw = isBuy ? tr.amount_in  : tr.amount_out;
+      const baseAmt  = scaleToNumber(baseRaw,  state.baseDecimals);
+      const quoteAmt = scaleToNumber(quoteRaw, state.quoteDecimals);
+
+      const priceStr = (tr.price_native != null && isFinite(Number(tr.price_native)))
+        ? Number(tr.price_native).toFixed(6)
+        : '—';
+
+      const traderShort = shortAddr(tr.trader);
+      // We only have the raw form here; the index page accepts raw or friendly,
+      // so passing it through ?address= works either way.
+      const traderHref = tr.trader
+        ? `${BASE}/?address=${encodeURIComponent(tr.trader)}`
+        : '#';
+
+      return `
+        <tr class="border-t border-slate-800 align-baseline">
+          <td class="py-1.5 pr-3 text-slate-400 text-xs whitespace-nowrap" title="${escapeHtml(new Date(tr.ts * 1000).toISOString())}">${escapeHtml(formatRelativeTime(tr.ts))}</td>
+          <td class="py-1.5 pr-3"><span class="inline-block text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${sideClass}">${sideLabel}</span></td>
+          <td class="py-1.5 pr-3 mono text-xs text-right whitespace-nowrap">${formatNumber(baseAmt, { maxFrac: 4 })} <span class="text-slate-500">${escapeHtml(state.baseSymbol)}</span></td>
+          <td class="py-1.5 pr-3 mono text-xs text-right whitespace-nowrap">${formatNumber(quoteAmt, { maxFrac: 4 })} <span class="text-slate-500">${escapeHtml(state.quoteSymbol)}</span></td>
+          <td class="py-1.5 pr-3 mono text-xs text-right whitespace-nowrap">${priceStr}</td>
+          <td class="py-1.5 pr-3 mono text-xs">
+            <a href="${traderHref}" class="hover:text-emerald-300" title="${escapeHtml(tr.trader || '')}">${escapeHtml(traderShort)}</a>
+          </td>
+        </tr>
+      `;
+    }
+
+    function updateSyncBadge(sync) {
+      if (!sync) { tradesSync.textContent = '—'; return; }
+      const ts = sync.newest_synced_ts;
+      tradesSync.textContent = ts ? 'Last sync: ' + formatRelativeTime(ts) : '—';
+    }
+
+    // ---------------------------------------------------------------------------
+    // Network: stages.
+    // ---------------------------------------------------------------------------
+    async function loadTokenInfo() {
+      const { ok, body, status } = await fetchJson(`${BASE}/api/token/${encodeURIComponent(state.addr)}`);
+      if (!ok || !body || !body.ok) {
+        if (status === 404) {
+          showEmptyState('Jetton not found', 'No master contract matches this address on TonAPI.', `${BASE}/`);
+        } else {
+          showEmptyState('Could not load token', (body && body.error && body.error.message) || `HTTP ${status}`, `${BASE}/`);
+        }
+        return false;
+      }
+      state.tokenData = body.data;
+      // Use friendly addr for the "back" link.
+      const t = state.tokenData.token;
+      const friendly = t.address_friendly || t.address;
+      backLink.href = `${BASE}/?address=${encodeURIComponent(friendly)}`;
+      emptyLink.href = `${BASE}/?address=${encodeURIComponent(friendly)}`;
+      // Update base symbol/decimals from token data.
+      state.baseSymbol = t.symbol || 'tokens';
+      state.baseDecimals = (typeof t.decimals === 'number') ? t.decimals : 9;
+      return true;
+    }
+
+    async function loadTradingInfo() {
+      const { ok, body, status } = await fetchJson(`${BASE}/api/trading/${encodeURIComponent(state.addr)}/info`);
+      if (!ok || !body || !body.ok) {
+        const code = body && body.error && body.error.code;
+        const msg  = (body && body.error && body.error.message) || `HTTP ${status}`;
+        if (code === 'not_listed') {
+          showEmptyState(
+            'Not listed on tracked DEXes',
+            'Trading data is unavailable for this jetton (we currently track DeDust and STON.fi).',
+            backLink.href,
+          );
+          return false;
+        }
+        if (code === 'upstream_unavailable' || status === 502 || status === 504) {
+          showUpstreamBanner('DeDust upstream unreachable — trading info unavailable, will retry on reload.');
+          // Render whatever we can with no pool.
+          state.info = null;
+          state.pool = null;
+          return true;
+        }
+        showEmptyState('Could not load trading info', msg, backLink.href);
+        return false;
+      }
+      state.info = body.data;
+      // Pick the pool object from the pools array matching info.primary.
+      const primary = state.info.primary;
+      if (primary && Array.isArray(state.info.pools)) {
+        state.pool = state.info.pools.find((p) => p.address === primary.pool && p.dex === primary.dex) || state.info.pools[0] || null;
+      } else {
+        state.pool = (state.info.pools && state.info.pools[0]) || null;
+      }
+      if (state.pool) {
+        state.quoteSymbol = state.pool.paired_with === 'TON' ? 'TON' : 'tokens';
+        state.quoteDecimals = (typeof state.pool.quote_decimals === 'number') ? state.pool.quote_decimals : 9;
+        // base_decimals from the pool can override token decimals if present
+        // (defensive — they should match).
+        if (typeof state.pool.base_decimals === 'number') state.baseDecimals = state.pool.base_decimals;
+      }
+      // Empty dexes array => same as not_listed.
+      if (!state.info.dexes || !state.info.dexes.length) {
+        showEmptyState(
+          'Not listed on tracked DEXes',
+          'Trading data is unavailable for this jetton (we currently track DeDust and STON.fi).',
+          backLink.href,
+        );
+        return false;
+      }
+      return true;
+    }
+
+    async function loadTrades(limit = 500) {
+      const { ok, body, status } = await fetchJson(
+        `${BASE}/api/trading/${encodeURIComponent(state.addr)}/trades?limit=${limit}`,
+      );
+      if (!ok || !body || !body.ok) {
+        const code = body && body.error && body.error.code;
+        if (code === 'upstream_unavailable' || status === 502 || status === 504) {
+          showUpstreamBanner('DeDust upstream unreachable while loading trades — showing cached data.');
+        }
+        // Still render an empty table.
+        state.trades = [];
+        renderTrades();
+        updateSyncBadge(null);
+        return;
+      }
+      const trades = Array.isArray(body.data.trades) ? body.data.trades : [];
+      state.trades = trades;
+      if (trades.length) {
+        state.oldestTs = trades[trades.length - 1].ts;
+      }
+      updateSyncBadge(body.data.sync);
+      renderTrades();
+      // Update latest-price stat now that we have trades.
+      const latestTrade = state.trades.find((tr) => tr.price_native != null);
+      if (latestTrade) {
+        const priceEl = $('#stat-price');
+        priceEl.textContent = Number(latestTrade.price_native).toFixed(6) + ' ' + state.quoteSymbol + ' / ' + state.baseSymbol;
+      }
+    }
+
+    async function loadOlder() {
+      if (!state.oldestTs) return;
+      loadOlderBtn.disabled = true;
+      const prevText = loadOlderBtn.textContent;
+      loadOlderBtn.textContent = 'Loading…';
+      try {
+        const { ok, body } = await fetchJson(
+          `${BASE}/api/trading/${encodeURIComponent(state.addr)}/trades?limit=200&before=${encodeURIComponent(state.oldestTs)}`,
+        );
+        if (!ok || !body || !body.ok) return;
+        const more = Array.isArray(body.data.trades) ? body.data.trades : [];
+        if (!more.length) {
+          loadOlderBtn.textContent = 'No older trades';
+          setTimeout(() => { loadOlderBtn.textContent = prevText; loadOlderBtn.disabled = false; }, 1500);
+          return;
+        }
+        // Append to the bottom (older).
+        state.trades = state.trades.concat(more);
+        state.oldestTs = more[more.length - 1].ts;
+        renderTrades();
+      } finally {
+        loadOlderBtn.disabled = false;
+        loadOlderBtn.textContent = prevText;
+      }
+    }
+    loadOlderBtn.addEventListener('click', loadOlder);
+
+    async function loadCandles() {
+      if (!state.pool) { setCandleData([]); return; }
+
+      const now = Math.floor(Date.now() / 1000);
+      const intervalSec = INTERVAL_SECONDS[state.interval] || 3600;
+
+      // Default window: last 24h.
+      let from = now - 24 * 3600;
+      let to = now;
+      let candles = await fetchCandles(from, to);
+
+      // Auto-widen if empty. DeDust pools can be quiet — TON/USDT only has
+      // trades from 2026-05-09, so try last 30 days.
+      if (!candles.length) {
+        from = now - 30 * 86400;
+        candles = await fetchCandles(from, to);
+      }
+
+      setCandleData(candles);
+    }
+
+    async function fetchCandles(from, to) {
+      const { ok, body, status } = await fetchJson(
+        `${BASE}/api/trading/${encodeURIComponent(state.addr)}/candles?interval=${encodeURIComponent(state.interval)}&from=${from}&to=${to}`,
+      );
+      if (!ok || !body || !body.ok) {
+        const code = body && body.error && body.error.code;
+        if (code === 'upstream_unavailable' || status === 502 || status === 504) {
+          showUpstreamBanner('DeDust upstream unreachable while loading candles — showing cached data.');
+        }
+        return [];
+      }
+      return Array.isArray(body.data.candles) ? body.data.candles : [];
+    }
+
+    // ---------------------------------------------------------------------------
+    // Live-feed hook for step 6 (WebSocket).
+    // The websocket handler in a future commit will call window._trading.appendTradeOnTop(t)
+    // for every new trade tick, and may also call setLiveOnline(true/false) when
+    // the connection opens/closes. For now: no-op shells.
+    // ---------------------------------------------------------------------------
+    window._trading = {
+      // Called by the step-6 WS handler with a normalised trade (same shape as
+      // /api/trading/:addr/trades returns).
+      appendTradeOnTop(trade) {
+        if (!trade || !trade.ts) return;
+        state.trades.unshift(trade);
+        // Keep a reasonable upper bound so the DOM doesn't grow unbounded.
+        if (state.trades.length > 2000) state.trades.length = 2000;
+        renderTrades();
+        if (trade.price_native != null) {
+          $('#stat-price').textContent = Number(trade.price_native).toFixed(6) + ' ' + state.quoteSymbol + ' / ' + state.baseSymbol;
+        }
+      },
+      setLiveOnline(on) {
+        const dot = $('#live-dot');
+        const lbl = $('#live-label');
+        if (on) {
+          dot.className = 'inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse';
+          dot.title = 'Live trade stream connected';
+          lbl.textContent = 'live';
+        } else {
+          dot.className = 'inline-block w-2.5 h-2.5 rounded-full bg-slate-500';
+          dot.title = 'REST-only (live stream not wired yet)';
+          lbl.textContent = 'offline';
+        }
+      },
+    };
+
+    // ---------------------------------------------------------------------------
+    // Copy address button.
+    // ---------------------------------------------------------------------------
+    $('#copy-addr').addEventListener('click', async () => {
+      const addr = state.tokenData?.token?.address;
+      if (!addr) return;
+      try {
+        await navigator.clipboard.writeText(addr);
+        const btn = $('#copy-addr');
+        const old = btn.textContent;
+        btn.textContent = '✓';
+        setTimeout(() => { btn.textContent = old; }, 1200);
+      } catch { /* ignore */ }
+    });
+
+    // ---------------------------------------------------------------------------
+    // Boot.
+    // ---------------------------------------------------------------------------
+    (async function init() {
+      state.addr = parseAddressFromPath();
+      backLink.href = `${BASE}/`;
+      emptyLink.href = `${BASE}/`;
+
+      if (!state.addr || state.addr === 'trading') {
+        showEmptyState('No address in URL', 'Open this page as /trading/<jetton-address>.', `${BASE}/`);
+        return;
+      }
+
+      // 1. Token info.
+      const tokenOk = await loadTokenInfo();
+      if (!tokenOk) return;
+
+      // 2. Trading info.
+      const tradingOk = await loadTradingInfo();
+      if (!tradingOk) return;
+
+      // Reveal cards now that we know the jetton is tradeable.
+      setLoading(false);
+      emptyEl.classList.add('hidden');
+      renderTokenCard();
+      renderIntervalPills();
+      chartCard.classList.remove('hidden');
+      tradesCard.classList.remove('hidden');
+
+      // 3. Trades (primes the DB and gives us the latest 500).
+      await loadTrades(500);
+
+      // 4. Candles for the default interval/window.
+      await loadCandles();
+
+      // Re-render the token card now that latest price is known.
+      renderTokenCard();
+    })().catch((err) => {
+      console.error('trading page init failed', err);
+      showEmptyState('Page failed to load', String(err && err.message || err), `${BASE}/`);
+    });
+  </script>
+</body>
+</html>
