@@ -36,6 +36,32 @@ Goal: every time we analyze a token, we learn something about its deployer.
 
 ---
 
+## Phase 1.5 — Trading data ✅ (2026-05-25)
+
+Shipped: candle chart + live trade feed for DeDust-listed jettons; STON.fi detection-only.
+
+- [x] DeDust REST client (bulk pool cache, trade history)
+- [x] STON.fi REST client (detection only)
+- [x] DEX detection service — `detectDexes(master)` → `{ dedust, stonfi, primary }`
+- [x] `trading_pools` / `trades` / `trading_sync_state` tables + DB helpers
+- [x] HTTP endpoints: `/api/trading/:jetton/info` / `/trades` / `/candles`
+- [x] OHLCV candle builder with 1m / 5m / 15m / 1h / 4h / 1d presets
+- [x] Trading page (`views/trading.html`) — chart + trades + live indicator
+- [x] WebSocket live trade stream (`/api/trading/:jetton/stream`) — DeDust polling under the hood
+- [x] Jetton search (`/api/search`) — address-or-text + dropdown on the screening page
+- [x] Trading badge on the main token page
+- [x] `node:test` runner wired (`npm test`)
+
+Deferred to Phase 2:
+- Full STON.fi trade / candle integration (only detection landed)
+- TonAPI WebSocket push as an alternative to DeDust polling
+- Mempool listener (was originally Phase 3 anyway)
+- LP-aware concentration flags
+
+See [`docs/07-trading.md`](./docs/07-trading.md).
+
+---
+
 ## Phase 2 — Holder & liquidity analysis (week 4)
 
 Goal: catch the easy ways scams look obvious if you look at the cap table.

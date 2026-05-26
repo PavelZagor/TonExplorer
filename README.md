@@ -1,10 +1,11 @@
 # TonExplorer
 
-Scam-screening analytics for TON jettons. Before buying a freshly-launched token, point TonExplorer at its master address and get a verdict based on three pillars:
+Scam-screening analytics for TON jettons. Before buying a freshly-launched token, point TonExplorer at its master address and get a verdict based on four pillars:
 
 1. **Developer reputation** — local registry of jetton deployers and their track record (how many tokens they've launched, how those ended up).
 2. **Holder distribution** — top holders, concentration, fresh-wallet ratio, LP locks.
 3. **Activity quality** — coordinated buy patterns, MEV / bot-farm signatures, wash-trading indicators.
+4. **Trading data** — DeDust-side candle chart + live trade feed, STON.fi detection. See [`docs/07-trading.md`](./docs/07-trading.md).
 
 > ⚠️ Early-stage project. The current build is the web interface skeleton. A Telegram bot wrapping the same backend is on the roadmap.
 

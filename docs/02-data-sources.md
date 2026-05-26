@@ -37,11 +37,32 @@ Out of scope for Phase 0–2. Would matter when:
 
 ## DEX-side data
 
-For LP detection and trade history we'll query DEXes directly:
-- **STON.fi** — `https://api.ston.fi/v1/` (pool info, swaps)
-- **DeDust** — `https://api.dedust.io/v2/` (pool info, swaps)
+For LP detection, trade history, and the trading-page chart we query DEXes directly:
 
-Add these in Phase 2 when we start looking at LP locks and trade clustering.
+### DeDust (`https://api.dedust.io/v2/`)
+
+Used for: detection, primary-pool selection, trade history, candles, live stream. Probed surface (2026-05-25):
+
+| Endpoint                                  | Result                                |
+| ----------------------------------------- | ------------------------------------- |
+| `GET /v2/pools`                           | 200, ~24 MB, ~50 k pools              |
+| `GET /v2/pools/{addr}`                    | **404 — does not exist**              |
+| `GET /v2/pools/{addr}/trades?page_size=N` | 200, JSON array, oldest-first         |
+| `GET /v2/jettons` / `/v3/*`               | 404                                   |
+
+Per-pool info comes from filtering the bulk list locally (`src/services/dedust-client.js` caches it for `DEDUST_CACHE_TTL_SECONDS`). The trades endpoint does **not** return a tx hash — `lt` (logical time) is the unique-per-account key we persist.
+
+### STON.fi (`https://api.ston.fi/v1/`)
+
+Used for: detection only. Full chart / trade integration is Phase 2+.
+
+| Endpoint        | Result                                                |
+| --------------- | ----------------------------------------------------- |
+| `GET /v1/pools` | 200, ~43 MB, ~43 k pools under `{ pool_list: [...] }` |
+
+Quirks: native TON is encoded as the **all-zeros** address (friendly `EQAAAAAA…AM9c`). Pools with `deprecated: true` are filtered at the detection layer.
+
+See [`docs/07-trading.md`](./07-trading.md) for the full data flow and schema.
 
 ## Caching
 

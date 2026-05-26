@@ -35,10 +35,20 @@ Active sprint = **Phase 0 (Foundation)** from [`ROADMAP.md`](./ROADMAP.md). Chec
 - [ ] `GET /api/token/:address/history` — return last N rows from `lookups`; render as a sparkline of `holders_count` + a verdicts list in the UI.
 - [ ] **Trade history** (largest piece). Background indexer per "interesting" jetton: paginate `/v2/blockchain/accounts/{master}/transactions` with `before_lt` until either we hit the 30-day cutoff or the start of history. Store in a new `jetton_trades` table; expose a timeline panel. (At ~700ms / 100 tx, a busy meme like PUTIN takes ~20 min for a month, so this is strictly background, not on-demand.)
 - [ ] **LP-aware concentration flags** — once a `wallet.tags` contains `lp`, exclude that holder from the top-N concentration sums. Today PUTIN's top-1 (26.66%) is the DeDust pool, so the no-signals verdict is the right call but for the wrong reason.
+- [x] **Trading page with DeDust integration** — shipped 2026-05-25 in 10 commits (one per spec step). DeDust trades + candles + live WS stream, STON.fi detection-only, jetton search, screening-page trading badge. See [`docs/07-trading.md`](./docs/07-trading.md) and `LASTCHANGES.md`.
+
+## Trading follow-ups (Phase 2 candidates)
+
+- [ ] **STON.fi full integration** — trades + candles + WS, on parity with DeDust. Detection-only is what landed today.
+- [ ] **LP-aware concentration flags** — exclude addresses tagged `lp` from the top-N concentration sums. Today PUTIN's top-1 (26.66%) is the DeDust pool. The trading layer surfaces "primary pool" addresses; auto-tag them as `lp` on first sight to make the screening verdict less misleading.
+- [ ] **TonAPI WebSocket option** — push-based trade source for sub-second updates, as an alternative to DeDust polling. Same `normalizeDedustTrade`-style parser, different ingest path. Useful for trade-alert Telegram bot in Phase 4.
+- [ ] **USD price overlay** — DeDust REST doesn't expose USD. Cross-reference STON.fi's `lp_total_supply_usd` per pool to derive a TON→USD rate, render dollar values on the trading chart.
+- [ ] **Mempool listener** — was Phase 3 in the original roadmap; deferred until DeDust polling proves too slow for the real-time use case it would unblock.
 
 ## Quality-of-life backlog
 
-- [ ] Lightweight test runner (node:test) for `analyzers/*` pure functions
+- [x] Lightweight test runner — `node:test` wired with `npm test`; 25 tests across detection / candles / stream
+- [ ] More tests for `analyzers/*` pure functions and the new trade-parser
 - [ ] OpenAPI schema for `/api/*` — generated, not handwritten
 - [ ] Replace in-memory cache with SQLite-backed cache so restarts don't dump hot data
 - [ ] Rate-limit middleware (token bucket per IP) — see `RATE_LIMIT_*` envs

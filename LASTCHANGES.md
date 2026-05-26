@@ -4,6 +4,23 @@ Newest first. Append a fresh entry at the top of this file after every significa
 
 ---
 
+## 2026-05-25 — Trading page with DeDust integration
+
+Fourth pillar of the analyzer lands: real-time-ish trade feed + candle chart for every jetton listed on a tracked DEX. DeDust gets the full stack (detection / trades / candles / live WS stream); STON.fi gets detection-only because their full integration would double the surface and the demand isn't there yet. Spec was shipped in 10 commits, one per step from the archived TZ at `docs/plans/2026-05-25-trading-feature.md`.
+
+- **New schema** in `003_trading.sql`: `trading_pools` / `trades` / `trading_sync_state`. Trade rows key by `(pool_address, lt)` — DeDust's REST does not return tx hash. No `raw_trace_json` column (anti-pattern §12), no USD columns (DeDust REST doesn't expose USD).
+- **New services**: `dedust-client` (bulk pool list cached 5 min with stale-fallback, trade history re-sorted newest-first), `stonfi-client` (same cache shape for `/v1/pools`; handles STON.fi's all-zeros TON pseudo-address), `dex-detection` (parallel gather across both DEXes, picks primary by largest TON-paired reserve_quote), `candle-builder` (1m / 5m / 15m / 1h / 4h / 1d bucket math, volume in `paired_with` units), `trade-parser` (normalises DeDust REST swaps onto the `trades` row shape, side relative to the pool's jetton_master), `trade-stream` (EventEmitter, per-pool refcount + 8s poll, dedup by `lt`, emits `trade` events).
+- **New routes**: `GET /api/trading/:jetton/info` / `/trades` / `/candles`, `GET /api/search?q=&limit=` (address fast-path + local jettons + TonAPI fallback), `WS /api/trading/:jetton/stream` (refcounted via tradeStream, JSON heartbeat + native ping every 30s). The existing `/api/token/:address` response gained a `trading: {dexes, primary_pool, primary_dex, paired_with, url}` field.
+- **New view**: `views/trading.html` — vanilla HTML + Tailwind CDN + TradingView Lightweight Charts 4.2.0 via CDN. Candle chart with interval pills + auto-widen-to-30d on empty 24h window, trades table with relative timestamps and buy/sell pills, "Load older" pagination, capped-exponential WS reconnect. `views/index.html` gained a debounced search dropdown above the existing Analyze button + a Trading badge card next to the verdict.
+- **Architectural choice**: live updates are driven by DeDust polling, not TonAPI WS push. Confirmed via Explore that sibling `ton-bot` is REST-only — no WS precedent in the codebase. The trade-parser interface is push-shape-agnostic, so a TonAPI WS path can be added later without changing the row shape or the WS client.
+- **Tests**: `npm test` wired via `node:test`. 25 tests across `dex-detection`, `stonfi-detection`, `candle-builder`, `trade-stream`. All passing.
+- **Smoke**: USDT (`EQCxE6mU…sDs`) detected on both `['dedust', 'stonfi']`, primary pool resolves to the canonical TON/USDT pair (DeDust pool `0:3e5f…5588`, reserves ~178.9 k TON / 452.4 k USDT), live trades parse with `price_native ≈ 0.395 TON/USDT`. PUTIN (canonical test jetton) correctly reports `dexes: []` everywhere — it's not on DeDust, so the trading page surfaces a friendly "Not listed" empty state and the WS rejects with `{code:'not_listed'}`. Bogus addresses fail at `bad_address` (HTTP) / socket-destroy (WS).
+- **Docs**: new `docs/07-trading.md` (architecture + schema + WS protocol + "how to add a DEX"). `docs/02-data-sources.md` and `docs/05-api.md` updated with the DeDust + STON.fi probed surface and every new endpoint. `ROADMAP.md` gets a Phase 1.5 section. `TODO.md` ticks the trading line and adds the new follow-ups (full STON.fi integration, LP-aware concentration flags, TonAPI WS option, USD overlay).
+
+Pre-flight note that paid off: the spec assumed `/v2/jetton/:address`; our actual route is `/api/token/:address` and the migration runner reads `*.sql` files, not a single `migrations.js`. Both were captured in the archived plan before this session started, so step 1 lined up the first commit cleanly.
+
+---
+
 ## 2026-05-25 — Wallet registry + lookups history + admin editor
 
 First user-managed state lands. Every token analysis now persists a snapshot row in `lookups` (append-only, future time-series feed). Every address we render in the UI is resolved against a new `wallets` table so the maintainer can attach labels, free-form notes, and a bounded set of tags (`lp / mev / farm / cex / rugger / trusted` plus free-form, lowercased + punctuation-stripped, max 8). Wallets can also be linked to other wallets via `wallet_links` with a constrained kind set (`funded_by / cluster_with / controls`).

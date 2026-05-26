@@ -52,12 +52,14 @@ HTTP request ──►│  Express     │── mounts at BASE_PATH
               src/db/index.js  ── better-sqlite3 ──► data/explorer.sqlite
 ```
 
-- **`src/server.js`** — entry point, env loading, middleware order, route mounting.
-- **`src/routes/`** — thin handlers; no business logic, just call lib/analyzers/db.
-- **`src/lib/`** — outbound clients (`tonapi.js`, future `toncenter.js`) and cross-cutting utilities (cache, address normalization).
+- **`src/server.js`** — entry point, env loading, middleware order, route mounting, ws upgrade hook.
+- **`src/routes/`** — thin handlers; no business logic, just call lib/services/analyzers/db. Trading endpoints in `trading.js` + `trading-ws.js`. Search in `search.js`.
+- **`src/lib/`** — outbound clients (`tonapi.js`, future `toncenter.js`) and cross-cutting utilities (cache, address normalization, logger, rate-limiter, auth).
+- **`src/services/`** — vertical features built from `lib/` primitives: `dedust-client`, `stonfi-client`, `dex-detection`, `candle-builder`, `trade-parser`, `trade-stream`. Each one is independently testable; instantiated in `server.js` and threaded through `ctx`.
 - **`src/analyzers/`** — pure functions that take fetched data and produce verdicts. Easiest to test, write here aggressively.
 - **`src/db/`** — schema + migrations + query helpers (`better-sqlite3`, synchronous API, no ORM).
-- **`views/`** — static HTML. No bundler.
+- **`views/`** — static HTML. No bundler. `index.html` = screening page, `trading.html` = chart + live trade feed.
+- **`tests/`** — `node:test` suites. Run with `npm test`.
 - **`data/`** — gitignored runtime state (SQLite file, possibly local caches).
 
 ## Patterns to follow
