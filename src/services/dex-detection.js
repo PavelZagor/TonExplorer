@@ -18,6 +18,7 @@
 // since DeDust does not return USD/TVL.
 
 const { toRaw } = require('../lib/address');
+const { TON_PSEUDO_RAW } = require('./stonfi-client');
 
 const TON_NATIVE = 'TON';
 
@@ -85,27 +86,46 @@ function pickPrimary(pools) {
   return { dex: pool.dex, pool: pool.pool_address, paired_with: pool.paired_with };
 }
 
-function makeDexDetection({ dedust, logger = null }) {
+// Map STON.fi's raw pool object onto a thin descriptor — NOT a full
+// trading_pools row, since STON.fi integration is detection-only here.
+function stonfiPoolToRow(p, targetRaw) {
+  if (!p || p.deprecated) return null;
+  let t0, t1;
+  try { t0 = toRaw(p.token0_address); } catch { return null; }
+  try { t1 = toRaw(p.token1_address); } catch { return null; }
+  const matchIdx = t0 === targetRaw ? 0 : t1 === targetRaw ? 1 : -1;
+  if (matchIdx === -1) return null;
+  const otherSide = matchIdx === 0 ? t1 : t0;
+  const pairedWith = otherSide === TON_PSEUDO_RAW ? TON_NATIVE : otherSide;
+  let poolAddrRaw;
+  try { poolAddrRaw = toRaw(p.address); } catch { return null; }
+  return {
+    pool_address:    poolAddrRaw,
+    dex:             'stonfi',
+    jetton_master:   targetRaw,
+    paired_with:     pairedWith,
+    router_address:  p.router_address || null,
+    volume_24h_usd:  p.volume_24h_usd != null ? Number(p.volume_24h_usd) : null,
+    lp_total_supply_usd: p.lp_total_supply_usd != null ? Number(p.lp_total_supply_usd) : null,
+  };
+}
+
+function makeDexDetection({ dedust, stonfi = null, logger = null }) {
   async function detectDexes(jettonMasterRaw) {
     const targetRaw = toRaw(jettonMasterRaw);
-    let allPools = [];
-    try {
-      allPools = await dedust.getPools();
-    } catch (err) {
-      if (logger) logger.warn('dex-detection: dedust.getPools failed', { err: err.message });
-    }
 
-    const dedustPools = [];
-    for (const p of allPools) {
-      const row = poolToRow(p, targetRaw);
-      if (row) dedustPools.push(row);
-    }
+    const [dedustPools, stonfiPools] = await Promise.all([
+      gatherDedust(targetRaw, dedust, logger),
+      stonfi ? gatherStonfi(targetRaw, stonfi, logger) : Promise.resolve([]),
+    ]);
 
     const result = {
       dedust: { pools: dedustPools },
-      stonfi: { pools: [] },
+      stonfi: { pools: stonfiPools },
       primary: null,
     };
+    // Primary is still chosen from DeDust pools only — STON.fi is detection-only
+    // for now, so we don't have full pool/decimal data to drive trade fetches.
     result.primary = pickPrimary(dedustPools);
     return result;
   }
@@ -113,9 +133,34 @@ function makeDexDetection({ dedust, logger = null }) {
   return { detectDexes };
 }
 
+async function gatherDedust(targetRaw, dedust, logger) {
+  let all;
+  try { all = await dedust.getPools(); }
+  catch (err) { if (logger) logger.warn('dex-detection: dedust.getPools failed', { err: err.message }); return []; }
+  const out = [];
+  for (const p of all) {
+    const row = poolToRow(p, targetRaw);
+    if (row) out.push(row);
+  }
+  return out;
+}
+
+async function gatherStonfi(targetRaw, stonfi, logger) {
+  let all;
+  try { all = await stonfi.getPools(); }
+  catch (err) { if (logger) logger.warn('dex-detection: stonfi.getPools failed', { err: err.message }); return []; }
+  const out = [];
+  for (const p of all) {
+    const row = stonfiPoolToRow(p, targetRaw);
+    if (row) out.push(row);
+  }
+  return out;
+}
+
 module.exports = {
   makeDexDetection,
   // exported for tests
   poolToRow,
+  stonfiPoolToRow,
   pickPrimary,
 };

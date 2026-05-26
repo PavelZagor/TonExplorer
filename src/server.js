@@ -11,6 +11,7 @@ const { makeRateLimiter } = require('./lib/rate-limit');
 const { logger, requestLogger } = require('./lib/logger');
 const { makeAdminAuth } = require('./lib/auth');
 const { makeDedustClient } = require('./services/dedust-client');
+const { makeStonfiClient } = require('./services/stonfi-client');
 const { makeDexDetection } = require('./services/dex-detection');
 const { makeTradeStream } = require('./services/trade-stream');
 const buildRoutes = require('./routes');
@@ -50,7 +51,13 @@ async function main() {
     logger,
   });
 
-  const dexDetection = makeDexDetection({ dedust, logger });
+  const stonfi = makeStonfiClient({
+    baseURL: process.env.STONFI_API_URL || undefined,
+    cacheTtlSec: Number(process.env.STONFI_CACHE_TTL_SECONDS || 300),
+    logger,
+  });
+
+  const dexDetection = makeDexDetection({ dedust, stonfi, logger });
   const tradeStream  = makeTradeStream({ dedust, db, logger, intervalMs: Number(process.env.TRADING_POLL_MS || 8_000) });
 
   const app = express();
