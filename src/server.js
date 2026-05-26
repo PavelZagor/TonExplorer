@@ -58,7 +58,7 @@ async function main() {
   });
 
   const dexDetection = makeDexDetection({ dedust, stonfi, logger });
-  const tradeStream  = makeTradeStream({ dedust, db, logger, intervalMs: Number(process.env.TRADING_POLL_MS || 8_000) });
+  const tradeStream  = makeTradeStream({ dedust, db, tonapi, logger, intervalMs: Number(process.env.TRADING_POLL_MS || 8_000) });
 
   const app = express();
   app.set('trust proxy', TRUST_PROXY);

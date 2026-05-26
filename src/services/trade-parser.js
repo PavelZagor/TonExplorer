@@ -102,8 +102,97 @@ function normalizeDedustTrade(t, pool) {
   };
 }
 
+// TonAPI account-events shape (from /v2/accounts/{pool}/events). Each event
+// can contain multiple actions; we only care about ones with type === 'JettonSwap'.
+// The JettonSwap object looks like:
+//   {
+//     dex: 'dedust' | 'stonfi',
+//     amount_in:  '<bigint string>' | '',     // in jetton_master_in units (when not TON)
+//     amount_out: '<bigint string>' | '',     // in jetton_master_out units (when not TON)
+//     ton_in:  <number, nanotons> | 0,
+//     ton_out: <number, nanotons> | 0,
+//     user_wallet: { address: '0:...' | 'EQ...' },
+//     router:      { address: '0:...' | 'EQ...' },
+//     jetton_master_in?:  { address, decimals, ... },
+//     jetton_master_out?: { address, decimals, ... },
+//   }
+//
+// Used as the recency fallback when DeDust's /v2/pools/{addr}/trades feed lags
+// (as it does for many low-volume pools — e.g. SCAT had its last DeDust trade
+// 17 days before a JettonSwap event was visible on TonAPI).
+function normalizeTonapiSwap(event, action, poolRow) {
+  if (!event || !action || !poolRow) return null;
+  const sw = action.JettonSwap;
+  if (!sw) return null;
+
+  // Resolve asset_in / amount_in.
+  let assetIn, amountIn;
+  if (sw.ton_in && Number(sw.ton_in) > 0) {
+    assetIn = 'TON';
+    amountIn = String(sw.ton_in);
+  } else if (sw.jetton_master_in?.address && sw.amount_in) {
+    try { assetIn = toRaw(sw.jetton_master_in.address); } catch { return null; }
+    amountIn = String(sw.amount_in);
+  } else {
+    return null;
+  }
+
+  // Resolve asset_out / amount_out.
+  let assetOut, amountOut;
+  if (sw.ton_out && Number(sw.ton_out) > 0) {
+    assetOut = 'TON';
+    amountOut = String(sw.ton_out);
+  } else if (sw.jetton_master_out?.address && sw.amount_out) {
+    try { assetOut = toRaw(sw.jetton_master_out.address); } catch { return null; }
+    amountOut = String(sw.amount_out);
+  } else {
+    return null;
+  }
+
+  // Drop swaps that don't involve this pool's base jetton.
+  if (assetIn !== poolRow.jetton_master && assetOut !== poolRow.jetton_master) return null;
+  const side = assetOut === poolRow.jetton_master ? 'buy' : 'sell';
+
+  // Use pool row's decimals (already enriched via TonAPI by ensurePoolDecimals).
+  // Fall back to the action's own jetton_master_*.decimals when present.
+  const baseDec = poolRow.base_decimals
+    ?? (assetIn === poolRow.jetton_master ? sw.jetton_master_in?.decimals : sw.jetton_master_out?.decimals)
+    ?? null;
+  const quoteDec = poolRow.quote_decimals ?? (poolRow.paired_with === 'TON' ? 9 : null);
+  let priceNative = null;
+  if (baseDec != null && quoteDec != null) {
+    try {
+      const aIn = BigInt(amountIn);
+      const aOut = BigInt(amountOut);
+      if (aIn > 0n && aOut > 0n) {
+        const quoteUnits = side === 'buy' ? aIn  : aOut;
+        const baseUnits  = side === 'buy' ? aOut : aIn;
+        const scale = 10 ** (baseDec - quoteDec);
+        priceNative = (Number(quoteUnits) / Number(baseUnits)) * scale;
+        if (!Number.isFinite(priceNative)) priceNative = null;
+      }
+    } catch { priceNative = null; }
+  }
+
+  let trader = null;
+  try { trader = toRaw(sw.user_wallet?.address || ''); } catch { trader = String(sw.user_wallet?.address || ''); }
+
+  return {
+    lt:           String(event.lt),
+    ts:           Number(event.timestamp),
+    side,
+    trader,
+    asset_in:     assetIn,
+    asset_out:    assetOut,
+    amount_in:    amountIn,
+    amount_out:   amountOut,
+    price_native: priceNative,
+  };
+}
+
 module.exports = {
   normalizeDedustTrade,
+  normalizeTonapiSwap,
   // exported for testing
   assetToTag,
   tsFromIso,

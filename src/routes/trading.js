@@ -12,7 +12,7 @@ const {
   setSyncState,
   backfillTradePrices,
 } = require('../db');
-const { normalizeDedustTrade } = require('../services/trade-parser');
+const { normalizeDedustTrade, normalizeTonapiSwap } = require('../services/trade-parser');
 const { buildCandles, intervalSeconds, INTERVAL_PRESETS } = require('../services/candle-builder');
 
 // If the pool row is missing decimals (DeDust's bulk /v2/pools returns null
@@ -190,26 +190,51 @@ function tradesHandler(ctx) {
     try { poolRow = await ensurePoolDecimals(ctx, poolRow, req.log); }
     catch (err) { req.log?.warn('ensurePoolDecimals failed', { err: err.message }); }
 
-    // Refresh from DeDust. Only refresh on no-`before` (newest page) — when the
-    // user is scrolling backwards we already have the older trades cached.
+    // Refresh from upstream. We hit BOTH DeDust /trades AND TonAPI events:
+    // DeDust gives us the bulk backfill cheaply but its per-pool feed lags
+    // hours-to-days for low-volume pools (verified on the SCAT pool — DeDust
+    // returned trades only up to 2026-05-09 while TonAPI showed JettonSwap
+    // events on the same pool from 2026-05-26). TonAPI events are real-time
+    // and include jetton metadata, so they fill the recency gap.
     let fetchedCount = 0;
-    if (!before && poolRow.dex === 'dedust') {
+    if (!before) {
       const pageSize = Math.min(limit, config.tradingBackfillLimit);
+      const collected = [];
+
+      if (poolRow.dex === 'dedust') {
+        try {
+          const upstream = await dedust.getPoolTrades(poolRow.pool_address, { pageSize });
+          for (const t of upstream) {
+            const r = normalizeDedustTrade(t, poolRow);
+            if (r) collected.push(r);
+          }
+        } catch (err) {
+          req.log?.warn('dedust.getPoolTrades failed', { pool: poolRow.pool_address, err: err.message });
+        }
+      }
+
       try {
-        const upstream = await dedust.getPoolTrades(poolRow.pool_address, { pageSize });
-        const normalised = upstream
-          .map((t) => normalizeDedustTrade(t, poolRow))
-          .filter(Boolean);
-        if (normalised.length) {
-          insertTrades(db, poolRow.pool_address, normalised);
-          fetchedCount = normalised.length;
-          const newestTs = Math.max(...normalised.map((n) => n.ts));
-          const oldestTs = Math.min(...normalised.map((n) => n.ts));
-          setSyncState(db, poolRow.pool_address, { oldestTs, newestTs });
+        const evResp = await ctx.tonapi.getAccountEvents(poolRow.pool_address, { limit: Math.min(100, Math.max(50, limit)) });
+        const events = evResp?.events || [];
+        for (const ev of events) {
+          if (ev.in_progress) continue;
+          for (const action of (ev.actions || [])) {
+            if (action.type !== 'JettonSwap') continue;
+            const r = normalizeTonapiSwap(ev, action, poolRow);
+            if (r) collected.push(r);
+          }
         }
       } catch (err) {
-        // Surface upstream failures but still serve whatever is in the local DB.
-        req.log?.warn('dedust.getPoolTrades failed', { pool: poolRow.pool_address, err: err.message });
+        req.log?.warn('tonapi.getAccountEvents failed', { pool: poolRow.pool_address, err: err.message });
+      }
+
+      if (collected.length) {
+        // INSERT OR IGNORE dedupes by (pool, lt). Sources can overlap; that's fine.
+        insertTrades(db, poolRow.pool_address, collected);
+        fetchedCount = collected.length;
+        const newestTs = Math.max(...collected.map((n) => n.ts));
+        const oldestTs = Math.min(...collected.map((n) => n.ts));
+        setSyncState(db, poolRow.pool_address, { oldestTs, newestTs });
       }
     }
 

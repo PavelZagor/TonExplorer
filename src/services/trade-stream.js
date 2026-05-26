@@ -24,18 +24,19 @@
 //   - `error`  ({ pool, err })
 
 const { EventEmitter } = require('events');
-const { normalizeDedustTrade } = require('./trade-parser');
+const { normalizeDedustTrade, normalizeTonapiSwap } = require('./trade-parser');
 const { getTradingPool, insertTrades, setSyncState, getTradesRange } = require('../db');
 
 const DEFAULT_INTERVAL_MS = 8_000;
 const PAGE_SIZE_PER_TICK = 50;
 
 class TradeStream extends EventEmitter {
-  constructor({ dedust, db, intervalMs = DEFAULT_INTERVAL_MS, logger = null } = {}) {
+  constructor({ dedust, db, tonapi = null, intervalMs = DEFAULT_INTERVAL_MS, logger = null } = {}) {
     super();
     if (!dedust) throw new Error('TradeStream requires a dedust client');
     if (!db)     throw new Error('TradeStream requires a db handle');
     this._dedust   = dedust;
+    this._tonapi   = tonapi;
     this._db       = db;
     this._logger   = logger;
     this._interval = Math.max(1000, intervalMs);
@@ -98,22 +99,39 @@ class TradeStream extends EventEmitter {
       const poolRow = getTradingPool(this._db, poolAddress);
       if (!poolRow) return;
 
-      let raw;
-      try {
-        raw = await this._dedust.getPoolTrades(poolAddress, { pageSize: PAGE_SIZE_PER_TICK });
-      } catch (err) {
-        if (this._logger) this._logger.warn('trade-stream poll failed', { pool: poolAddress, err: err.message });
-        this.emit('error', { pool: poolAddress, err });
-        return;
-      }
-
+      // Two upstream sources merged per tick: DeDust REST (cheap, but lags on
+      // low-volume pools) and TonAPI events (real-time, covers DeDust's gap).
       const lastLt = this._lastLt.get(poolAddress) || 0n;
       const fresh = [];
-      for (const t of raw) {
-        let ltb; try { ltb = BigInt(t.lt); } catch { continue; }
-        if (ltb <= lastLt) continue;
-        const row = normalizeDedustTrade(t, poolRow);
-        if (row) fresh.push({ row, ltb });
+
+      try {
+        const raw = await this._dedust.getPoolTrades(poolAddress, { pageSize: PAGE_SIZE_PER_TICK });
+        for (const t of raw) {
+          let ltb; try { ltb = BigInt(t.lt); } catch { continue; }
+          if (ltb <= lastLt) continue;
+          const row = normalizeDedustTrade(t, poolRow);
+          if (row) fresh.push({ row, ltb });
+        }
+      } catch (err) {
+        if (this._logger) this._logger.warn('trade-stream dedust poll failed', { pool: poolAddress, err: err.message });
+      }
+
+      if (this._tonapi) {
+        try {
+          const evResp = await this._tonapi.getAccountEvents(poolAddress, { limit: PAGE_SIZE_PER_TICK });
+          for (const ev of (evResp?.events || [])) {
+            if (ev.in_progress) continue;
+            let ltb; try { ltb = BigInt(ev.lt); } catch { continue; }
+            if (ltb <= lastLt) continue;
+            for (const action of (ev.actions || [])) {
+              if (action.type !== 'JettonSwap') continue;
+              const row = normalizeTonapiSwap(ev, action, poolRow);
+              if (row) fresh.push({ row, ltb });
+            }
+          }
+        } catch (err) {
+          if (this._logger) this._logger.warn('trade-stream tonapi poll failed', { pool: poolAddress, err: err.message });
+        }
       }
       if (fresh.length === 0) return;
 
