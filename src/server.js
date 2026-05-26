@@ -116,14 +116,21 @@ async function main() {
   app.use(`${BASE_PATH}/api`, rateLimit, router);
 
   // Static views — inject BASE_PATH into the HTML so the frontend uses the right prefix.
-  app.get([`${BASE_PATH}/`, `${BASE_PATH}`], (req, res) => {
+  // No-cache here because we ship templates without content hashes and want a
+  // PM2 reload to be visible to clients without a manual hard refresh. The
+  // ETag still saves bandwidth via conditional 304s.
+  const htmlHeaders = (res) => {
     res.set('Content-Type', 'text/html; charset=utf-8');
+    res.set('Cache-Control', 'no-cache, must-revalidate');
+  };
+  app.get([`${BASE_PATH}/`, `${BASE_PATH}`], (req, res) => {
+    htmlHeaders(res);
     res.send(renderTemplate('index.html', BASE_PATH));
   });
 
   // Trading page. The :address segment is read on the client from location.pathname.
   app.get(`${BASE_PATH}/trading/:address`, (req, res) => {
-    res.set('Content-Type', 'text/html; charset=utf-8');
+    htmlHeaders(res);
     res.send(renderTemplate('trading.html', BASE_PATH));
   });
 
