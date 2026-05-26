@@ -12,8 +12,10 @@ const { logger, requestLogger } = require('./lib/logger');
 const { makeAdminAuth } = require('./lib/auth');
 const { makeDedustClient } = require('./services/dedust-client');
 const { makeDexDetection } = require('./services/dex-detection');
+const { makeTradeStream } = require('./services/trade-stream');
 const buildRoutes = require('./routes');
 const buildAdminWalletRouter = require('./routes/admin/wallet');
+const { makeTradingWs } = require('./routes/trading-ws');
 
 const PORT = Number(process.env.PORT || 3031);
 const BASE_PATH = normalizeBasePath(process.env.BASE_PATH || '/explorer');
@@ -49,6 +51,7 @@ async function main() {
   });
 
   const dexDetection = makeDexDetection({ dedust, logger });
+  const tradeStream  = makeTradeStream({ dedust, db, logger, intervalMs: Number(process.env.TRADING_POLL_MS || 8_000) });
 
   const app = express();
   app.set('trust proxy', TRUST_PROXY);
@@ -85,6 +88,7 @@ async function main() {
     tonapi,
     dedust,
     dexDetection,
+    tradeStream,
     logger,
     config: {
       version: pkg.version,
@@ -128,7 +132,7 @@ async function main() {
     res.status(500).json({ ok: false, error: { code: 'internal', message: 'internal error' } });
   });
 
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     logger.info('listening', {
       version: pkg.version,
       port: PORT,
@@ -140,6 +144,21 @@ async function main() {
       logger.warn('admin disabled', { reason: 'ADMIN_TOKEN is empty — /api/admin/* returns 503' });
     }
   });
+
+  // WebSocket: live trade stream at ${BASE_PATH}/api/trading/:jetton/stream
+  const tradingWs = makeTradingWs({ ctx, maxClients: Number(process.env.TRADING_MAX_WS_CLIENTS || 100) });
+  tradingWs.attach(server, BASE_PATH);
+
+  // Graceful shutdown — flush WS clients and stop poll timers.
+  function shutdown(signal) {
+    logger.info('shutdown', { signal });
+    tradingWs.shutdown();
+    tradeStream.shutdown();
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(1), 10_000).unref();
+  }
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT',  () => shutdown('SIGINT'));
 }
 
 function renderTemplate(name, basePath) {

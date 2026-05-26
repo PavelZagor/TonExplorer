@@ -676,10 +676,7 @@
     }
 
     // ---------------------------------------------------------------------------
-    // Live-feed hook for step 6 (WebSocket).
-    // The websocket handler in a future commit will call window._trading.appendTradeOnTop(t)
-    // for every new trade tick, and may also call setLiveOnline(true/false) when
-    // the connection opens/closes. For now: no-op shells.
+    // Live-feed hooks (called by the WebSocket client below).
     // ---------------------------------------------------------------------------
     window._trading = {
       // Called by the step-6 WS handler with a normalised trade (same shape as
@@ -708,6 +705,56 @@
         }
       },
     };
+
+    // ---------------------------------------------------------------------------
+    // Live WebSocket trade stream — auto-reconnect with capped exponential backoff.
+    // ---------------------------------------------------------------------------
+    function openLiveStream(jettonRaw) {
+      const wsScheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = `${wsScheme}//${location.host}${BASE}/api/trading/${encodeURIComponent(jettonRaw)}/stream`;
+      let backoffMs = 1000;
+      let closedByUser = false;
+      let ws = null;
+
+      function connect() {
+        if (closedByUser) return;
+        try { ws = new WebSocket(url); }
+        catch (err) { console.warn('ws constructor failed', err); scheduleReconnect(); return; }
+
+        ws.addEventListener('open', () => {
+          // Greeted with {type:'subscribed'} from server next.
+        });
+        ws.addEventListener('message', (ev) => {
+          let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+          if (msg.type === 'subscribed') {
+            backoffMs = 1000;
+            window._trading.setLiveOnline(true);
+          } else if (msg.type === 'trade') {
+            window._trading.appendTradeOnTop(msg.data);
+          } else if (msg.type === 'ping') {
+            // server heartbeat — nothing to do, browsers reply to native ping/pong automatically
+          } else if (msg.type === 'error') {
+            console.warn('trading-ws server error', msg);
+            window._trading.setLiveOnline(false);
+            if (msg.code === 'not_listed' || msg.code === 'pool_not_found') closedByUser = true;
+          }
+        });
+        ws.addEventListener('close', () => {
+          window._trading.setLiveOnline(false);
+          scheduleReconnect();
+        });
+        ws.addEventListener('error', () => { /* close will follow */ });
+      }
+      function scheduleReconnect() {
+        if (closedByUser) return;
+        const wait = Math.min(backoffMs, 30_000);
+        setTimeout(connect, wait);
+        backoffMs = Math.min(backoffMs * 2, 30_000);
+      }
+
+      window.addEventListener('beforeunload', () => { closedByUser = true; try { ws?.close(); } catch {} });
+      connect();
+    }
 
     // ---------------------------------------------------------------------------
     // Copy address button.
@@ -761,6 +808,9 @@
 
       // Re-render the token card now that latest price is known.
       renderTokenCard();
+
+      // 5. Live trade stream — pushes new trades into the table and updates the price.
+      openLiveStream(state.addr);
     })().catch((err) => {
       console.error('trading page init failed', err);
       showEmptyState('Page failed to load', String(err && err.message || err), `${BASE}/`);
