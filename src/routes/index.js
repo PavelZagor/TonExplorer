@@ -5,7 +5,7 @@ const express = require('express');
 const healthRoute = require('./health');
 const tokenRoute = require('./token');
 const developerRoute = require('./developer');
-const { infoHandler: tradingInfo, tradesHandler: tradingTrades } = require('./trading');
+const { infoHandler: tradingInfo, tradesHandler: tradingTrades, candlesHandler: tradingCandles } = require('./trading');
 
 function buildRoutes(ctx) {
   const router = express.Router();
@@ -13,8 +13,9 @@ function buildRoutes(ctx) {
   router.get('/health', healthRoute(ctx));
   router.get('/token/:address', tokenRoute(ctx));
   router.get('/developer/:address', developerRoute(ctx));
-  router.get('/trading/:jetton/info',   tradingInfo(ctx));
-  router.get('/trading/:jetton/trades', tradingTrades(ctx));
+  router.get('/trading/:jetton/info',    tradingInfo(ctx));
+  router.get('/trading/:jetton/trades',  tradingTrades(ctx));
+  router.get('/trading/:jetton/candles', tradingCandles(ctx));
 
   return router;
 }

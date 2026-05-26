@@ -6,11 +6,13 @@ const {
   listTradingPoolsByJetton,
   insertTrades,
   getTradesRange,
+  getTradesBetween,
   getTradingPool,
   getSyncState,
   setSyncState,
 } = require('../db');
 const { normalizeDedustTrade } = require('../services/trade-parser');
+const { buildCandles, intervalSeconds, INTERVAL_PRESETS } = require('../services/candle-builder');
 
 const POOL_PREVIEW_LIMIT = 10;
 
@@ -206,4 +208,71 @@ function clampInt(v, min, max, dflt) {
   return Math.max(min, Math.min(max, n));
 }
 
-module.exports = { infoHandler, tradesHandler };
+// GET /api/trading/:jetton/candles?interval=1m|5m|15m|1h|4h|1d&from=&to=&pool=
+// Builds OHLCV candles in memory from rows currently in `trades`. Does NOT
+// refresh from DeDust — clients are expected to hit /trades first (or rely on
+// the WS stream) to keep the local table warm. Default window: last 24h.
+function candlesHandler(ctx) {
+  const { db, dexDetection } = ctx;
+  return async function candles(req, res) {
+    const input = req.params.jetton;
+    if (!isValid(input)) {
+      return res.status(400).json({ ok: false, error: { code: 'bad_address', message: 'invalid TON address' } });
+    }
+    const jettonRaw = toRaw(input);
+
+    const intervalName = String(req.query.interval || '1h');
+    const ivl = intervalSeconds(intervalName);
+    if (!ivl) {
+      return res.status(400).json({
+        ok: false,
+        error: { code: 'bad_interval', message: `interval must be one of: ${Object.keys(INTERVAL_PRESETS).join(', ')}` },
+      });
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const toTs   = toInt(req.query.to)   ?? now;
+    const fromTs = toInt(req.query.from) ?? (toTs - 24 * 3600);
+    if (fromTs >= toTs) {
+      return res.status(400).json({ ok: false, error: { code: 'bad_range', message: 'from must be < to' } });
+    }
+
+    let poolRow = null;
+    if (req.query.pool) {
+      try { poolRow = getTradingPool(db, toRaw(req.query.pool)); } catch {}
+      if (!poolRow) {
+        return res.status(404).json({ ok: false, error: { code: 'pool_not_found', message: 'no such pool in registry — load /info first' } });
+      }
+    } else {
+      // Find primary via detection (cached).
+      let detection;
+      try { detection = await dexDetection.detectDexes(jettonRaw); }
+      catch (err) {
+        req.log?.warn('dex-detection failed', { jetton: jettonRaw, err: err.message });
+        return res.status(502).json({ ok: false, error: { code: 'upstream_unavailable', message: 'dex registry unreachable' } });
+      }
+      if (!detection.primary) {
+        return res.status(404).json({ ok: false, error: { code: 'not_listed', message: 'jetton is not on any tracked DEX' } });
+      }
+      poolRow = getTradingPool(db, detection.primary.pool);
+    }
+
+    const rows = getTradesBetween(db, poolRow.pool_address, fromTs, toTs);
+    const series = buildCandles(rows, ivl, { quoteDecimals: poolRow.quote_decimals ?? null });
+
+    res.json({
+      ok: true,
+      data: {
+        jetton_master: jettonRaw,
+        pool: poolView(poolRow),
+        interval: intervalName,
+        interval_seconds: ivl,
+        from: fromTs,
+        to: toTs,
+        candles: series,
+      },
+    });
+  };
+}
+
+module.exports = { infoHandler, tradesHandler, candlesHandler };
