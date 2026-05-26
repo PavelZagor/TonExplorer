@@ -18,7 +18,8 @@ module.exports = function tokenRoute({ tonapi, db }) {
     if (!isValid(input)) {
       return res.status(400).json({ ok: false, error: { code: 'bad_address', message: 'invalid TON address' } });
     }
-    const raw = toRaw(input);
+    let raw = toRaw(input);
+    let resolvedFrom = null;
 
     let jetton;
     try {
@@ -26,10 +27,26 @@ module.exports = function tokenRoute({ tonapi, db }) {
     } catch (err) {
       const status = err.response?.status;
       if (status === 404) {
-        return res.status(404).json({ ok: false, error: { code: 'not_found', message: 'jetton not found' } });
+        // If the address isn't a jetton master, see if it's a known DEX pool —
+        // a very common copy-paste from tonviewer/DEX UIs. If so, transparently
+        // re-target the analysis to the pool's non-TON jetton side.
+        const resolved = await resolveJettonFromAccount(tonapi, raw).catch(() => null);
+        if (resolved) {
+          try {
+            jetton = await tonapi.getJetton(resolved.jetton);
+            resolvedFrom = { address: raw, address_friendly: input !== raw ? input : null, kind: resolved.kind, interface: resolved.interface };
+            raw = resolved.jetton;
+          } catch (err2) {
+            req.log?.warn('resolved jetton also not found', { from: raw, to: resolved.jetton, err: err2.message });
+            return res.status(404).json({ ok: false, error: { code: 'not_found', message: 'jetton not found' } });
+          }
+        } else {
+          return res.status(404).json({ ok: false, error: { code: 'not_found', message: 'jetton not found' } });
+        }
+      } else {
+        req.log?.warn('tonapi.getJetton failed', { address: raw, status, err: err.message });
+        return res.status(502).json({ ok: false, error: { code: 'upstream_unavailable', message: 'tonapi unreachable' } });
       }
-      req.log?.warn('tonapi.getJetton failed', { address: raw, status, err: err.message });
-      return res.status(502).json({ ok: false, error: { code: 'upstream_unavailable', message: 'tonapi unreachable' } });
     }
 
     const metadata = jetton.metadata || {};
@@ -115,6 +132,7 @@ module.exports = function tokenRoute({ tonapi, db }) {
     res.json({
       ok: true,
       data: {
+        resolved_from: resolvedFrom,
         token: {
           address: raw,
           address_friendly: input !== raw ? input : null,
@@ -137,3 +155,26 @@ module.exports = function tokenRoute({ tonapi, db }) {
     });
   };
 };
+
+// When /v2/jettons/{addr} 404s, this checks whether `addr` is actually a DEX
+// pool contract and, if so, returns its non-TON underlying jetton master so the
+// route can transparently re-target the analysis. Returns null when we can't
+// (or shouldn't) auto-resolve.
+const POOL_INTERFACE_RE = /^(dedust_v2_cpmm|dedust_v2_pool|stonfi_pool|stonfi_pool_v2|stonfi_pool_v3)$/i;
+
+async function resolveJettonFromAccount(tonapi, address) {
+  let acct;
+  try { acct = await tonapi.getAccount(address); } catch { return null; }
+  const ifaces = acct?.interfaces || [];
+  const hit = ifaces.find((i) => POOL_INTERFACE_RE.test(i));
+  if (!hit) return null;
+
+  let bag;
+  try { bag = await tonapi.getAccountJettons(address); } catch { return null; }
+  const balances = (bag?.balances || []).filter((b) => b?.jetton?.address);
+  // Only auto-resolve when the pool has exactly one jetton side (the other
+  // being native TON). Jetton/jetton pools are ambiguous — leave a 404 for now
+  // so the user picks which side they want manually.
+  if (balances.length !== 1) return null;
+  return { jetton: balances[0].jetton.address, kind: 'dex_pool', interface: hit };
+}

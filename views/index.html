@@ -221,6 +221,18 @@
 
     function render(data) {
       const t = data.token, d = data.developer, h = data.holders, v = data.verdict;
+      const rf = data.resolved_from || null;
+
+      const resolvedBanner = rf ? `
+        <div class="bg-amber-900/30 border border-amber-700 rounded-lg p-3 text-sm text-amber-200">
+          <p>
+            The address you entered (<span class="mono text-xs">${escapeHtml(rf.address_friendly || rf.address)}</span>)
+            is a <span class="font-semibold">${escapeHtml(rf.kind === 'dex_pool' ? 'DEX pool' : rf.kind)}</span>
+            (interface <span class="mono text-xs">${escapeHtml(rf.interface)}</span>), not a jetton master.
+            Showing analysis of its underlying jetton instead.
+          </p>
+        </div>
+      ` : '';
 
       const signalBadges = (v.signals || []).map((s) => `
         <span class="inline-block text-xs px-2 py-1 rounded border ${severityClass(s.severity)}">${s.id}${s.detail ? ` — ${escapeHtml(s.detail)}` : ''}</span>
@@ -235,6 +247,7 @@
       `).join('');
 
       result.innerHTML = `
+        ${resolvedBanner}
         <div class="bg-slate-900/60 border border-slate-800 rounded-lg p-4">
           <div class="flex items-start justify-between gap-3">
             <div>
