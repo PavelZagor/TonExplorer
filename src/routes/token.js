@@ -87,30 +87,30 @@ module.exports = function tokenRoute({ tonapi, db, dexDetection, config }) {
       req.log?.warn('db write failed (non-fatal)', { address: raw, err: err.message });
     }
 
-    const signals = concentrationFlags(holders);
-
-    const verdict = {
-      phase: 0,
-      score: null,
-      summary: 'Phase 0 build — verdict scoring not yet wired.',
-      signals,
-    };
-
-    const top1 = holders.top[0]?.share ?? null;
-    const top10 = holders.top.slice(0, 10).reduce((s, h) => s + (h.share || 0), 0) || null;
-
-    try {
-      recordAnalysis(db, { jetton: raw, score: null, verdict });
-      recordLookup(db, {
-        jetton: raw,
-        holders_count: holders.total || jetton.holders_count || 0,
-        top1_share: top1,
-        top10_share: top10,
-        signals,
-        source_ip: req.ip || null,
-      });
-    } catch (err) {
-      req.log?.warn('lookup persist failed (non-fatal)', { address: raw, err: err.message });
+    // Trading availability + LP discovery — best-effort, never block on this.
+    // Detection runs ONCE: its pool list both feeds the `trading` response
+    // field AND tells us which holders are LP pools (excluded from
+    // concentration flags below).
+    let trading = { dexes: [], primary_pool: null, primary_dex: null, paired_with: null, url: null };
+    const detectedPoolAddresses = new Set();
+    if (dexDetection) {
+      try {
+        const detection = await dexDetection.detectDexes(raw);
+        for (const p of detection.dedust.pools) detectedPoolAddresses.add(p.pool_address);
+        for (const p of detection.stonfi.pools) detectedPoolAddresses.add(p.pool_address);
+        const dexes = [];
+        if (detection.dedust.pools.length > 0) dexes.push('dedust');
+        if (detection.stonfi.pools.length > 0) dexes.push('stonfi');
+        trading = {
+          dexes,
+          primary_pool: detection.primary?.pool || null,
+          primary_dex:  detection.primary?.dex  || null,
+          paired_with:  detection.primary?.paired_with || null,
+          url: dexes.length ? `${config?.basePath || ''}/trading/${raw}` : null,
+        };
+      } catch (err) {
+        req.log?.warn('dex-detection failed (non-fatal)', { jetton: raw, err: err.message });
+      }
     }
 
     // Resolve user-managed labels for every address we are about to render.
@@ -126,28 +126,40 @@ module.exports = function tokenRoute({ tonapi, db, dexDetection, config }) {
     };
     const decoratedHolders = {
       ...holders,
-      top: holders.top.map((h) => ({ ...h, wallet: labelOf(h.address) })),
+      top: holders.top.map((h) => ({
+        ...h,
+        wallet: labelOf(h.address),
+        is_lp:  detectedPoolAddresses.has(h.address),
+      })),
     };
 
-    // Trading availability — best-effort, never block the analysis on this.
-    // Empty `dexes` is a perfectly valid answer ("not listed on tracked DEXes").
-    let trading = { dexes: [], primary_pool: null, primary_dex: null, paired_with: null, url: null };
-    if (dexDetection) {
-      try {
-        const detection = await dexDetection.detectDexes(raw);
-        const dexes = [];
-        if (detection.dedust.pools.length > 0) dexes.push('dedust');
-        if (detection.stonfi.pools.length > 0) dexes.push('stonfi');
-        trading = {
-          dexes,
-          primary_pool: detection.primary?.pool || null,
-          primary_dex:  detection.primary?.dex  || null,
-          paired_with:  detection.primary?.paired_with || null,
-          url: dexes.length ? `${config?.basePath || ''}/trading/${raw}` : null,
-        };
-      } catch (err) {
-        req.log?.warn('dex-detection failed (non-fatal)', { jetton: raw, err: err.message });
-      }
+    const signals = concentrationFlags(decoratedHolders);
+
+    const verdict = {
+      phase: 0,
+      score: null,
+      summary: 'Phase 0 build — verdict scoring not yet wired.',
+      signals,
+    };
+
+    // top1/top10 in lookups history reflect the LP-adjusted view as well, so
+    // future time-series UI doesn't get noise from a pool growing/shrinking.
+    const nonLpTop = decoratedHolders.top.filter((h) => !(h.is_lp || (h.wallet?.tags || []).includes('lp')));
+    const top1  = nonLpTop[0]?.share ?? null;
+    const top10 = nonLpTop.slice(0, 10).reduce((s, h) => s + (h.share || 0), 0) || null;
+
+    try {
+      recordAnalysis(db, { jetton: raw, score: null, verdict });
+      recordLookup(db, {
+        jetton: raw,
+        holders_count: holders.total || jetton.holders_count || 0,
+        top1_share: top1,
+        top10_share: top10,
+        signals,
+        source_ip: req.ip || null,
+      });
+    } catch (err) {
+      req.log?.warn('lookup persist failed (non-fatal)', { address: raw, err: err.message });
     }
 
     res.json({

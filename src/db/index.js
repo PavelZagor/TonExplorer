@@ -345,6 +345,19 @@ function getTradesBetween(db, poolAddress, fromTs, toTs) {
     .all(poolAddress, Number(fromTs), Number(toTs));
 }
 
+// Returns a Set<string> of input addresses that are present in the
+// trading_pools table — used by the analyzers to recognise LP pool wallets
+// without polluting the user-managed `wallets` table.
+function selectKnownPoolAddresses(db, addresses) {
+  const list = Array.from(new Set((addresses || []).filter((a) => typeof a === 'string' && a)));
+  if (list.length === 0) return new Set();
+  const placeholders = list.map(() => '?').join(',');
+  const rows = db
+    .prepare(`SELECT pool_address FROM trading_pools WHERE pool_address IN (${placeholders})`)
+    .all(...list);
+  return new Set(rows.map((r) => r.pool_address));
+}
+
 function getSyncState(db, poolAddress) {
   return db.prepare('SELECT * FROM trading_sync_state WHERE pool_address = ?').get(poolAddress) || null;
 }
@@ -399,4 +412,5 @@ module.exports = {
   getTradesBetween,
   getSyncState,
   setSyncState,
+  selectKnownPoolAddresses,
 };

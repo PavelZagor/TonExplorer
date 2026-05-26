@@ -357,13 +357,18 @@
         <span class="inline-block text-xs px-2 py-1 rounded border ${severityClass(s.severity)}">${s.id}${s.detail ? ` — ${escapeHtml(s.detail)}` : ''}</span>
       `).join(' ');
 
-      const topRows = (h.top || []).map((row, i) => `
-        <tr class="border-t border-slate-800 align-baseline">
-          <td class="py-1 pr-2 text-slate-500 w-8">${i + 1}</td>
-          <td class="py-1 pr-2">${renderAddress(row.address, row.wallet)}</td>
-          <td class="py-1 pr-2 mono text-xs text-right whitespace-nowrap">${row.share != null ? (row.share * 100).toFixed(2) + '%' : '—'}</td>
-        </tr>
-      `).join('');
+      const topRows = (h.top || []).map((row, i) => {
+        const lpAutoBadge = row.is_lp
+          ? `<span class="inline-block text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border bg-cyan-900/40 border-cyan-700 text-cyan-200" title="Auto-detected DEX pool from the trading registry — excluded from concentration flags">LP (auto)</span>`
+          : '';
+        return `
+          <tr class="border-t border-slate-800 align-baseline ${row.is_lp ? 'opacity-70' : ''}">
+            <td class="py-1 pr-2 text-slate-500 w-8">${i + 1}</td>
+            <td class="py-1 pr-2">${renderAddress(row.address, row.wallet)}${lpAutoBadge ? ' ' + lpAutoBadge : ''}</td>
+            <td class="py-1 pr-2 mono text-xs text-right whitespace-nowrap">${row.share != null ? (row.share * 100).toFixed(2) + '%' : '—'}</td>
+          </tr>
+        `;
+      }).join('');
 
       result.innerHTML = `
         ${resolvedBanner}

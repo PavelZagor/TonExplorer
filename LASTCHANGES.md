@@ -4,6 +4,20 @@ Newest first. Append a fresh entry at the top of this file after every significa
 
 ---
 
+## 2026-05-25 — LP-aware concentration flags
+
+Direct follow-on to the trading work earlier today. The screening verdict used to count DEX pools as ordinary concentration: a pool sitting in the top-N holders would inflate top1/top10 and fire a "majority" flag for what is actually liquid supply. Now every top holder is annotated `is_lp` from a live join against the detection result for that jetton, and `concentrationFlags` skips them before computing sums.
+
+- `src/analyzers/holders.js::concentrationFlags` filters out `is_lp` holders (or `wallet.tags ∋ 'lp'`) before reducing top1/top10. When LPs were excluded, the detail line gets a `(LP excluded: N)` suffix so the UI can show why the number changed.
+- `src/routes/token.js` reorders the work: detection runs first, the resulting `dedust.pools + stonfi.pools` addresses are projected into a `Set`, and each holder is annotated `is_lp` against it. `lookups.top1_share` / `top10_share` history rows are now LP-adjusted too so future time-series UI doesn't get noise from a pool growing/shrinking.
+- `views/index.html` renders an `LP (auto)` cyan chip on each LP-marked holder row and softens the row opacity so it visually drops out of the concentration story.
+- `src/db/index.js` gets `selectKnownPoolAddresses(db, addrs)` — not used by this change (which prefers in-memory matching against the detection result) but useful for future analyzers that need to recognise pool addresses across jettons.
+- Tests: 7 new in `tests/holders-lp.test.js` (top-1 majority, LP-at-top-1 ignored, mixed LP / non-LP with detail suffix, manual `wallet.tags`, top-10 sums, all-LP, isLpHolder predicate). Total suite 32 pass / 0 fail.
+
+Note on the stale CLAUDE.md anecdote: "PUTIN's top-1 (26.66%) is the DeDust pool" doesn't reproduce — PUTIN isn't on DeDust today (zero pools in the bulk list). The unit tests cover the intent regardless.
+
+---
+
 ## 2026-05-25 — Trading page with DeDust integration
 
 Fourth pillar of the analyzer lands: real-time-ish trade feed + candle chart for every jetton listed on a tracked DEX. DeDust gets the full stack (detection / trades / candles / live WS stream); STON.fi gets detection-only because their full integration would double the surface and the demand isn't there yet. Spec was shipped in 10 commits, one per step from the archived TZ at `docs/plans/2026-05-25-trading-feature.md`.

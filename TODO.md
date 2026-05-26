@@ -40,7 +40,7 @@ Active sprint = **Phase 0 (Foundation)** from [`ROADMAP.md`](./ROADMAP.md). Chec
 ## Trading follow-ups (Phase 2 candidates)
 
 - [ ] **STON.fi full integration** — trades + candles + WS, on parity with DeDust. Detection-only is what landed today.
-- [ ] **LP-aware concentration flags** — exclude addresses tagged `lp` from the top-N concentration sums. Today PUTIN's top-1 (26.66%) is the DeDust pool. The trading layer surfaces "primary pool" addresses; auto-tag them as `lp` on first sight to make the screening verdict less misleading.
+- [x] **LP-aware concentration flags** — every top-N holder is now annotated with `is_lp` (from a live join against the detected pool set for that jetton) plus the existing user-managed `wallet.tags ∋ 'lp'` path. `concentrationFlags` skips LP holders and annotates the detail with `(LP excluded: N)`. UI renders an `LP (auto)` chip on the holder row. Unit tests in `tests/holders-lp.test.js`. *(Live regression case from the original note — "PUTIN's top-1 is the DeDust pool" — no longer reproduces; the PUTIN/TON pool isn't on DeDust right now.)*
 - [ ] **TonAPI WebSocket option** — push-based trade source for sub-second updates, as an alternative to DeDust polling. Same `normalizeDedustTrade`-style parser, different ingest path. Useful for trade-alert Telegram bot in Phase 4.
 - [ ] **USD price overlay** — DeDust REST doesn't expose USD. Cross-reference STON.fi's `lp_total_supply_usd` per pool to derive a TON→USD rate, render dollar values on the trading chart.
 - [ ] **Mempool listener** — was Phase 3 in the original roadmap; deferred until DeDust polling proves too slow for the real-time use case it would unblock.
