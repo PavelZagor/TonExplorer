@@ -387,8 +387,9 @@
       const symbol = t.symbol || '???';
       $('#ticker').textContent = '$' + symbol;
       $('#token-name').textContent = t.name ? '· ' + t.name : '';
-      $('#token-addr').textContent = t.address;
-      $('#token-addr').title = t.address;
+      const tokenDisplay = t.address_friendly || t.address;
+      $('#token-addr').textContent = tokenDisplay;
+      $('#token-addr').title = `${tokenDisplay}\n${t.address}`;
 
       const dexBadge = $('#dex-badge');
       if (info && info.dexes && info.dexes.length) {
@@ -400,10 +401,12 @@
         dexBadge.className = 'text-xs px-2 py-1 rounded border bg-slate-800 border-slate-700 text-slate-400';
       }
 
-      // Pool address + tonviewer link.
+      // Pool address + tonviewer link. Show friendly EQ, link to friendly,
+      // keep raw available in the tooltip for grepping.
       const poolEl = $('#stat-pool');
       if (pool && pool.address) {
-        poolEl.innerHTML = `<a href="https://tonviewer.com/${encodeURIComponent(pool.address)}" target="_blank" rel="noopener" class="hover:text-emerald-300" title="${escapeHtml(pool.address)}">${escapeHtml(shortAddr(pool.address))} ↗</a>`;
+        const poolDisplay = pool.address_friendly || pool.address;
+        poolEl.innerHTML = `<a href="https://tonviewer.com/${encodeURIComponent(poolDisplay)}" target="_blank" rel="noopener" class="hover:text-emerald-300" title="${escapeHtml(poolDisplay)}\n${escapeHtml(pool.address)}">${escapeHtml(shortAddr(poolDisplay))} ↗</a>`;
       } else {
         poolEl.textContent = '—';
       }
@@ -565,19 +568,23 @@
         ? Number(tr.price_native).toFixed(6)
         : '—';
 
-      const traderShort = shortAddr(tr.trader);
-      // The address itself links out to tonviewer (external explorer with full
-      // tx history for the wallet). Local wallet-analysis is not built yet.
-      const tonviewerHref = tr.trader
-        ? `https://tonviewer.com/${encodeURIComponent(tr.trader)}`
+      // Prefer the friendly EQ form for display + tonviewer linking + admin
+      // overlay key; keep the raw form as the filter-set key (it's what every
+      // other trade in the table also stores under `trader`).
+      const traderDisplay = tr.trader_friendly || tr.trader;
+      const traderShort = shortAddr(traderDisplay);
+      const tonviewerHref = traderDisplay
+        ? `https://tonviewer.com/${encodeURIComponent(traderDisplay)}`
         : null;
-      const addrAttr = escapeHtml(tr.trader || '');
+      const filterKey = escapeHtml(tr.trader || '');           // raw — matches stored rows
+      const adminKey  = escapeHtml(traderDisplay || '');       // friendly — admin endpoint accepts either
+      const tooltip   = escapeHtml([traderDisplay, tr.trader].filter(Boolean).join('\n')) + '\nOpen on tonviewer.com';
 
       const traderCell = tr.trader ? `
         <span class="inline-flex items-center gap-1.5">
-          <a href="${tonviewerHref}" target="_blank" rel="noopener" class="hover:text-emerald-300" title="${addrAttr}\nOpen on tonviewer.com">${escapeHtml(traderShort)}</a>
-          <button type="button" class="js-filter-trader text-slate-500 hover:text-emerald-400 px-1 leading-none" data-addr="${addrAttr}" title="Show only this trader">🔎</button>
-          <button type="button" class="js-edit-wallet  text-slate-500 hover:text-emerald-400 px-1 leading-none" data-addr="${addrAttr}" title="Edit label / tags">✎</button>
+          <a href="${tonviewerHref}" target="_blank" rel="noopener" class="hover:text-emerald-300" title="${tooltip}">${escapeHtml(traderShort)}</a>
+          <button type="button" class="js-filter-trader text-slate-500 hover:text-emerald-400 px-1 leading-none" data-addr="${filterKey}" title="Show only this trader">🔎</button>
+          <button type="button" class="js-edit-wallet  text-slate-500 hover:text-emerald-400 px-1 leading-none" data-addr="${adminKey}" title="Edit label / tags">✎</button>
         </span>
       ` : '<span class="text-slate-500">—</span>';
 
@@ -594,14 +601,19 @@
     }
 
     // Trader filter: clicking the 🔎 icon scopes the trades table to one wallet.
-    function setTraderFilter(addr) {
-      state.traderFilter = addr || null;
+    // The filter key is the RAW form (matches `tr.trader` in stored rows). The
+    // banner shows the friendly form, derived by looking up the first matching
+    // trade — every trade row carries both forms.
+    function setTraderFilter(rawAddr) {
+      state.traderFilter = rawAddr || null;
       const banner = $('#trader-filter-banner');
       const link = $('#trader-filter-link');
       if (state.traderFilter) {
-        link.textContent = shortAddr(state.traderFilter);
-        link.title = state.traderFilter;
-        link.href = `https://tonviewer.com/${encodeURIComponent(state.traderFilter)}`;
+        const sample = state.trades.find((tr) => tr.trader === state.traderFilter);
+        const display = (sample && sample.trader_friendly) || state.traderFilter;
+        link.textContent = shortAddr(display);
+        link.title = display;
+        link.href = `https://tonviewer.com/${encodeURIComponent(display)}`;
         banner.classList.remove('hidden');
       } else {
         banner.classList.add('hidden');
@@ -610,11 +622,29 @@
     }
     $('#trader-filter-clear').addEventListener('click', () => setTraderFilter(null));
 
+    // Two timestamps, two meanings: `newest_synced_ts` is the timestamp of the
+    // newest TRADE we've seen (can be hours old on quiet pools — that's data),
+    // `last_checked_at` is when we last polled upstream (should always be very
+    // recent if the page is open). Show both so the user can tell "no recent
+    // trades" apart from "the system stopped checking".
+    let lastSyncState = null;
     function updateSyncBadge(sync) {
-      if (!sync) { tradesSync.textContent = '—'; return; }
-      const ts = sync.newest_synced_ts;
-      tradesSync.textContent = ts ? 'Last sync: ' + formatRelativeTime(ts) : '—';
+      lastSyncState = sync || null;
+      if (!sync) { tradesSync.textContent = '—'; tradesSync.title = ''; return; }
+      const newest = sync.newest_synced_ts;
+      const checked = sync.last_checked_at;
+      const parts = [];
+      if (newest)  parts.push('newest trade ' + formatRelativeTime(newest));
+      if (checked) parts.push('checked ' + formatRelativeTime(checked));
+      tradesSync.textContent = parts.length ? parts.join(' · ') : '—';
+      tradesSync.title = [
+        newest  ? 'Newest trade: ' + new Date(newest  * 1000).toISOString() : null,
+        checked ? 'Last poll: '    + new Date(checked * 1000).toISOString() : null,
+      ].filter(Boolean).join('\n');
     }
+    // Re-render the relative timestamps every second so "checked 2s ago" advances
+    // smoothly without waiting for the next REST/WS round-trip.
+    setInterval(() => { if (lastSyncState) updateSyncBadge(lastSyncState); }, 1000);
 
     // ---------------------------------------------------------------------------
     // Network: stages.
@@ -798,6 +828,19 @@
         if (trade.price_native != null) {
           $('#stat-price').textContent = Number(trade.price_native).toFixed(6) + ' ' + state.quoteSymbol + ' / ' + state.baseSymbol;
         }
+        // A live trade is also evidence the pool was just polled.
+        const now = Math.floor(Date.now() / 1000);
+        updateSyncBadge({
+          ...(lastSyncState || {}),
+          newest_synced_ts: trade.ts,
+          last_checked_at: now,
+        });
+      },
+      // Called by the WS heartbeat handler so a quiet pool can prove it's
+      // still being checked even when no trades arrive.
+      bumpLastChecked() {
+        const now = Math.floor(Date.now() / 1000);
+        updateSyncBadge({ ...(lastSyncState || {}), last_checked_at: now });
       },
       setLiveOnline(on) {
         const dot = $('#live-dot');
@@ -837,10 +880,13 @@
           if (msg.type === 'subscribed') {
             backoffMs = 1000;
             window._trading.setLiveOnline(true);
+            window._trading.bumpLastChecked();
           } else if (msg.type === 'trade') {
             window._trading.appendTradeOnTop(msg.data);
           } else if (msg.type === 'ping') {
-            // server heartbeat — nothing to do, browsers reply to native ping/pong automatically
+            // Server heartbeat — proof the stream is alive. Use it to advance
+            // the "checked" badge on quiet pools.
+            window._trading.bumpLastChecked();
           } else if (msg.type === 'error') {
             console.warn('trading-ws server error', msg);
             window._trading.setLiveOnline(false);
@@ -1013,7 +1059,8 @@
     // Copy address button.
     // ---------------------------------------------------------------------------
     $('#copy-addr').addEventListener('click', async () => {
-      const addr = state.tokenData?.token?.address;
+      const t = state.tokenData?.token;
+      const addr = t?.address_friendly || t?.address;
       if (!addr) return;
       try {
         await navigator.clipboard.writeText(addr);

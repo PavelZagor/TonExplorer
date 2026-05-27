@@ -1,6 +1,6 @@
 'use strict';
 
-const { toRaw, isValid } = require('../lib/address');
+const { toRaw, toFriendly, isValid } = require('../lib/address');
 const {
   upsertTradingPool,
   listTradingPoolsByJetton,
@@ -129,12 +129,19 @@ function infoHandler(ctx) {
 
     const trimmed = sortPoolsForPreview(persistedPools).slice(0, POOL_PREVIEW_LIMIT);
 
+    const primary = detection.primary ? {
+      ...detection.primary,
+      pool_friendly: safeFriendly(detection.primary.pool),
+      paired_with_friendly: safeFriendly(detection.primary.paired_with),
+    } : null;
+
     res.json({
       ok: true,
       data: {
         jetton_master: jettonRaw,
+        jetton_master_friendly: safeFriendly(jettonRaw),
         dexes,
-        primary: detection.primary,    // { dex, pool, paired_with } | null
+        primary,                       // { dex, pool, pool_friendly, paired_with, paired_with_friendly } | null
         pools: trimmed.map(poolView),
         pool_count: totalPools,
         url: dexes.length ? `${ctx.config.basePath}/trading/${jettonRaw}` : null,
@@ -235,6 +242,10 @@ function tradesHandler(ctx) {
         const newestTs = Math.max(...collected.map((n) => n.ts));
         const oldestTs = Math.min(...collected.map((n) => n.ts));
         setSyncState(db, poolRow.pool_address, { oldestTs, newestTs });
+      } else {
+        // Pool is quiet — still record the poll so the UI doesn't pretend
+        // the page hasn't refreshed.
+        setSyncState(db, poolRow.pool_address, {});
       }
     }
 
@@ -245,6 +256,7 @@ function tradesHandler(ctx) {
       ok: true,
       data: {
         jetton_master: jettonRaw,
+        jetton_master_friendly: safeFriendly(jettonRaw),
         pool: poolView(poolRow),
         sync,
         fetched: fetchedCount,
@@ -256,12 +268,23 @@ function tradesHandler(ctx) {
 
 // --- view helpers (DB row → API shape) ---
 
+// `safeFriendly(raw)` — never throws; returns the friendly form for a real raw
+// address, the literal 'TON' for the native pseudo-address, or null for null
+// input. Used everywhere we emit address strings so frontends can prefer
+// *_friendly without needing to know about the special cases.
+function safeFriendly(raw) {
+  if (!raw) return null;
+  try { return toFriendly(raw); } catch { return null; }
+}
+
 function poolView(row) {
   if (!row) return null;
   return {
     address: row.pool_address,
+    address_friendly: safeFriendly(row.pool_address),
     dex: row.dex,
     paired_with: row.paired_with,
+    paired_with_friendly: safeFriendly(row.paired_with),
     pool_type: row.pool_type,
     base_decimals: row.base_decimals,
     quote_decimals: row.quote_decimals,
@@ -278,8 +301,11 @@ function tradeView(row) {
     ts: row.ts,
     side: row.side,
     trader: row.trader,
+    trader_friendly: safeFriendly(row.trader),
     asset_in: row.asset_in,
+    asset_in_friendly: safeFriendly(row.asset_in),
     asset_out: row.asset_out,
+    asset_out_friendly: safeFriendly(row.asset_out),
     amount_in: row.amount_in,
     amount_out: row.amount_out,
     price_native: row.price_native,

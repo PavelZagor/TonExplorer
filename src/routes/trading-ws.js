@@ -20,10 +20,29 @@
 
 const WebSocket = require('ws');
 
-const { toRaw, isValid } = require('../lib/address');
+const { toRaw, toFriendly, isValid } = require('../lib/address');
 const { getTradingPool } = require('../db');
 
-const HEARTBEAT_MS = 30_000;
+// Mirror routes/trading.js::safeFriendly. WS messages carry the same shape as
+// the REST /trades response so frontend code can read trader_friendly etc.
+function safeFriendly(raw) {
+  if (!raw) return null;
+  try { return toFriendly(raw); } catch { return null; }
+}
+
+function annotateTrade(row) {
+  return {
+    ...row,
+    trader_friendly:    safeFriendly(row.trader),
+    asset_in_friendly:  safeFriendly(row.asset_in),
+    asset_out_friendly: safeFriendly(row.asset_out),
+  };
+}
+
+// Short heartbeat by design: the frontend uses `ping` messages to advance the
+// "checked Xs ago" indicator on quiet pools, so a long interval makes the page
+// look stalled even when the upstream polling is still running every ~8s.
+const HEARTBEAT_MS = 10_000;
 const DEFAULT_MAX_CLIENTS = 100;
 
 function makeTradingWs({ ctx, maxClients = DEFAULT_MAX_CLIENTS }) {
@@ -54,7 +73,7 @@ function makeTradingWs({ ctx, maxClients = DEFAULT_MAX_CLIENTS }) {
     const onTrade = ({ pool, data }) => {
       if (!alive) return;
       if (pool !== poolRow.pool_address) return;
-      try { ws.send(JSON.stringify({ type: 'trade', data })); } catch {}
+      try { ws.send(JSON.stringify({ type: 'trade', data: annotateTrade(data) })); } catch {}
     };
     tradeStream.on('trade', onTrade);
 
@@ -75,8 +94,11 @@ function makeTradingWs({ ctx, maxClients = DEFAULT_MAX_CLIENTS }) {
       ws.send(JSON.stringify({
         type: 'subscribed',
         jetton: jettonRaw,
+        jetton_friendly: safeFriendly(jettonRaw),
         pool: poolRow.pool_address,
+        pool_friendly: safeFriendly(poolRow.pool_address),
         paired_with: poolRow.paired_with,
+        paired_with_friendly: safeFriendly(poolRow.paired_with),
       }));
     } catch {}
   }

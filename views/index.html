@@ -247,20 +247,35 @@
       return `<span class="inline-block text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${tagStyle(t)}">${escapeHtml(t)}</span>`;
     }
 
+    // Pick the user-friendly form of an address. Accepts either a raw string or
+    // `{ raw, friendly }`-style pair. Falls back to whatever we have. Used so the
+    // UI shows EQ… everywhere even when older code paths still pass raw.
+    function pickFriendly(maybe) {
+      if (!maybe) return null;
+      if (typeof maybe === 'string') return maybe;
+      return maybe.friendly || maybe.raw || null;
+    }
+
     // Render a TON address with its optional label and tags, plus a pencil button.
-    function renderAddress(addr, wallet, { editable = true, fallback = '—', notesTitle = true } = {}) {
+    // `addr` may be a raw `0:…` string or an already-friendly `EQ…` — both work,
+    // but callers should pass friendly when they have it. `addrFriendly` is an
+    // optional override used by callers that have both forms (e.g. holders).
+    function renderAddress(addr, wallet, { editable = true, fallback = '—', notesTitle = true, addrFriendly = null } = {}) {
       if (!addr) return `<span class="text-slate-500 text-sm">${escapeHtml(fallback)}</span>`;
+      const display = addrFriendly || addr;     // what to show in the UI
+      const dataKey = display;                  // admin endpoint accepts either form
       const label = wallet?.label ? `<span class="text-slate-100 font-medium mr-1">${escapeHtml(wallet.label)}</span>` : '';
       const tags = (wallet?.tags || []).map(tagChip).join(' ');
-      const titleParts = [addr];
+      const titleParts = [display];
+      if (display !== addr) titleParts.push(addr);   // also expose the raw form in the tooltip
       if (notesTitle && wallet?.notes) titleParts.push(wallet.notes);
       const title = escapeHtml(titleParts.join('\n'));
       const editBtn = editable
-        ? `<button class="text-slate-500 hover:text-emerald-400 text-xs px-1 js-edit-wallet" data-addr="${escapeHtml(addr)}" title="Edit label / tags">✎</button>`
+        ? `<button class="text-slate-500 hover:text-emerald-400 text-xs px-1 js-edit-wallet" data-addr="${escapeHtml(dataKey)}" title="Edit label / tags">✎</button>`
         : '';
       return `
         <span class="inline-flex items-baseline flex-wrap gap-1" title="${title}">
-          ${label}<span class="mono text-xs text-slate-400">${shortAddr(addr)}</span>${tags ? ' ' + tags : ''}${editBtn ? ' ' + editBtn : ''}
+          ${label}<span class="mono text-xs text-slate-400">${shortAddr(display)}</span>${tags ? ' ' + tags : ''}${editBtn ? ' ' + editBtn : ''}
         </span>
       `;
     }
@@ -315,8 +330,9 @@
       };
       const pair = tr.paired_with === 'TON' ? 'TON' : (tr.paired_with ? 'jetton' : '');
       const dexBadges = tr.dexes.map(badgeFor).join(' ');
+      const primaryDisplay = tr.primary_pool_friendly || tr.primary_pool;
       const primaryLine = tr.primary_pool
-        ? `<p class="mono text-[11px] text-slate-500 mt-2 truncate-addr" title="${escapeHtml(tr.primary_pool)}">primary pool · ${shortAddr(tr.primary_pool)}${pair ? ` · paired with ${escapeHtml(pair)}` : ''}</p>`
+        ? `<p class="mono text-[11px] text-slate-500 mt-2 truncate-addr" title="${escapeHtml(tr.primary_pool)}">primary pool · ${shortAddr(primaryDisplay)}${pair ? ` · paired with ${escapeHtml(pair)}` : ''}</p>`
         : '';
       const viewBtn = tradeUrl
         ? `<a href="${escapeHtml(tradeUrl)}" class="inline-block text-sm bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded">View live trades →</a>`
@@ -364,7 +380,7 @@
         return `
           <tr class="border-t border-slate-800 align-baseline ${row.is_lp ? 'opacity-70' : ''}">
             <td class="py-1 pr-2 text-slate-500 w-8">${i + 1}</td>
-            <td class="py-1 pr-2">${renderAddress(row.address, row.wallet)}${lpAutoBadge ? ' ' + lpAutoBadge : ''}</td>
+            <td class="py-1 pr-2">${renderAddress(row.address, row.wallet, { addrFriendly: row.address_friendly })}${lpAutoBadge ? ' ' + lpAutoBadge : ''}</td>
             <td class="py-1 pr-2 mono text-xs text-right whitespace-nowrap">${row.share != null ? (row.share * 100).toFixed(2) + '%' : '—'}</td>
           </tr>
         `;
@@ -376,7 +392,7 @@
           <div class="flex items-start justify-between gap-3">
             <div>
               <h2 class="text-lg font-semibold">${escapeHtml(t.name || '(unnamed)')} <span class="text-slate-500 text-sm font-normal">${t.symbol ? '· ' + escapeHtml(t.symbol) : ''}</span></h2>
-              <p class="mono text-xs text-slate-400 mt-1 break-all">${escapeHtml(t.address)}</p>
+              <p class="mono text-xs text-slate-400 mt-1 break-all" title="${escapeHtml(t.address)}">${escapeHtml(t.address_friendly || t.address)}</p>
             </div>
             <div class="text-right">
               <p class="text-xs text-slate-400">holders</p>
@@ -394,11 +410,11 @@
             </div>
             <div>
               <dt class="text-xs text-slate-400">Admin</dt>
-              <dd>${t.admin ? renderAddress(t.admin, t.admin_wallet) : `<span class="text-emerald-300 text-sm">renounced</span>`}</dd>
+              <dd>${t.admin ? renderAddress(t.admin, t.admin_wallet, { addrFriendly: t.admin_friendly }) : `<span class="text-emerald-300 text-sm">renounced</span>`}</dd>
             </div>
             <div>
               <dt class="text-xs text-slate-400">Deployer ${t.deployer_hint ? `<span class="text-amber-400" title="${escapeHtml(t.deployer_hint)}">(${escapeHtml(t.deployer_hint.split(',')[0])})</span>` : ''}</dt>
-              <dd>${renderAddress(t.deployer, t.deployer_wallet, { fallback: 'unknown' })}</dd>
+              <dd>${renderAddress(t.deployer, t.deployer_wallet, { fallback: 'unknown', addrFriendly: t.deployer_friendly })}</dd>
             </div>
           </dl>
         </div>
@@ -407,7 +423,7 @@
           <div class="bg-slate-900/60 border border-slate-800 rounded-lg p-4">
             <h3 class="font-semibold mb-3">Developer</h3>
             ${d && d.address ? `
-              <p class="mono text-xs text-slate-400 mb-3 truncate-addr" title="${escapeHtml(d.address)}">${shortAddr(d.address)}</p>
+              <p class="mono text-xs text-slate-400 mb-3 truncate-addr" title="${escapeHtml(d.address)}">${escapeHtml(shortAddr(d.address_friendly || d.address))}</p>
               <div class="flex items-baseline gap-3">
                 <span class="text-3xl font-bold ${reputationColor(d.reputation_score)}">${d.reputation_score ?? '—'}</span>
                 <span class="text-xs text-slate-400">reputation · confidence: ${escapeHtml(d.confidence)}</span>

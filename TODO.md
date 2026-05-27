@@ -37,6 +37,8 @@ Active sprint = **Phase 0 (Foundation)** from [`ROADMAP.md`](./ROADMAP.md). Chec
 - [ ] **LP-aware concentration flags** — once a `wallet.tags` contains `lp`, exclude that holder from the top-N concentration sums. Today PUTIN's top-1 (26.66%) is the DeDust pool, so the no-signals verdict is the right call but for the wrong reason.
 - [x] **Trading page with DeDust integration** — shipped 2026-05-25 in 10 commits (one per spec step). DeDust trades + candles + live WS stream, STON.fi detection-only, jetton search, screening-page trading badge. See [`docs/07-trading.md`](./docs/07-trading.md) and `LASTCHANGES.md`.
 - [x] **Trading page: trader-row icons + live WS unblocked** — nginx `Upgrade`/`Connection` headers added so the live stream connects; ✎ rename and 🔎 filter icons on every trader row, address text now opens tonviewer in a new tab (no more `?address=<wallet>` dead-end). 2026-05-26.
+- [x] **Friendly EQ display everywhere** — `toFriendly()` lib + `*_friendly` annotations across `/api/token`, `/api/trading/*`, WS trade messages, developer card. Both `views/*.html` prefer friendly with raw kept in the tooltip. SCAT-style "admin = zero address" now shows as renounced. 2026-05-27.
+- [x] **Honest sync indicator** — `trading_sync_state.last_checked_at` added (migration 004) and bumped on every poll. Trading page shows "newest trade Xm ago · checked Ys ago" so a quiet pool no longer looks broken. WS heartbeat shortened to 10s for snappier visual confirmation. 2026-05-27.
 
 ## Trading follow-ups (Phase 2 candidates)
 

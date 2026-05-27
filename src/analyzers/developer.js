@@ -1,5 +1,12 @@
 'use strict';
 
+const { toFriendly } = require('../lib/address');
+
+function safeFriendly(raw) {
+  if (!raw) return null;
+  try { return toFriendly(raw); } catch { return null; }
+}
+
 // Pure functions for the "developer reputation" pillar.
 // Phase 0 produces a stub score; Phase 1 will swap in real signals.
 
@@ -18,6 +25,7 @@ function buildDeveloperCard(devRow) {
   if (!devRow) {
     return {
       address: null,
+      address_friendly: null,
       jettons_count: 0,
       rugs_count: 0,
       alive_count: 0,
@@ -28,6 +36,7 @@ function buildDeveloperCard(devRow) {
   }
   return {
     address: devRow.address,
+    address_friendly: safeFriendly(devRow.address),
     first_seen_at: devRow.first_seen_at,
     jettons_count: devRow.jettons_count,
     rugs_count: devRow.rugs_count,

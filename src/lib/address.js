@@ -75,10 +75,71 @@ function isValid(addr) {
   }
 }
 
+// Encode a raw `wc:hex64` to user-friendly base64url (EQ.../UQ.../kQ.../0Q...).
+// Idempotent: passing a friendly address returns it unchanged (modulo
+// `bounceable`/`testnet` overrides — set them to re-encode).
+//
+// The STON.fi native-TON pseudo-address (`0:000…000`) is meaningless as a
+// real account, so we surface it as the symbolic string 'TON' — that matches
+// how the rest of the codebase already tags native sides.
+function toFriendly(addr, opts = {}) {
+  if (addr == null) throw new Error('address is required');
+  const s = String(addr).trim();
+  if (s === 'TON') return 'TON';
+
+  // Pseudo-address for native TON used by STON.fi: 0:<64 zeros>. Don't try to
+  // encode it — show 'TON' so the UI doesn't mix a fake EQ string with the
+  // genuine native side.
+  if (s === '0:0000000000000000000000000000000000000000000000000000000000000000') return 'TON';
+
+  let raw;
+  if (isFriendly(s) && !opts.force) {
+    // Already friendly. Only re-encode when caller explicitly asks (e.g. to
+    // change bounceability). Otherwise short-circuit so we don't strip tag
+    // info silently.
+    return s;
+  }
+  raw = toRaw(s); // throws on garbage — desired
+
+  const { bounceable = true, testnet = false } = opts;
+  const [wcStr, hex] = raw.split(':');
+  const workchain = parseInt(wcStr, 10);
+
+  let tag = bounceable ? 0x11 : 0x51;
+  if (testnet) tag |= 0x80;
+
+  const buf = Buffer.alloc(36);
+  buf[0] = tag;
+  // workchain is a signed 8-bit value (masterchain is -1).
+  buf.writeInt8(workchain, 1);
+  Buffer.from(hex, 'hex').copy(buf, 2);
+  const crc = crc16(buf.subarray(0, 34));
+  buf.writeUInt16BE(crc, 34);
+
+  return buf.toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+// Convenience: returns `{ raw, friendly }` for any input. Skips on falsy/special
+// values so call sites don't have to guard.
+function bothForms(addr) {
+  if (!addr) return { raw: null, friendly: null };
+  try {
+    const raw = toRaw(addr);
+    return { raw, friendly: toFriendly(raw) };
+  } catch {
+    return { raw: addr, friendly: null };
+  }
+}
+
 module.exports = {
   isRaw,
   isFriendly,
   isValid,
   toRaw,
+  toFriendly,
+  bothForms,
   parseFriendly,
 };

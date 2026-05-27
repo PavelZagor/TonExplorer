@@ -1,6 +1,11 @@
 'use strict';
 
-const { toRaw, isValid } = require('../lib/address');
+const { toRaw, toFriendly, isValid } = require('../lib/address');
+
+function safeFriendly(raw) {
+  if (!raw) return null;
+  try { return toFriendly(raw); } catch { return null; }
+}
 const {
   upsertDeveloper,
   upsertJetton,
@@ -34,7 +39,7 @@ module.exports = function tokenRoute({ tonapi, db, dexDetection, config }) {
         if (resolved) {
           try {
             jetton = await tonapi.getJetton(resolved.jetton);
-            resolvedFrom = { address: raw, address_friendly: input !== raw ? input : null, kind: resolved.kind, interface: resolved.interface };
+            resolvedFrom = { address: raw, address_friendly: safeFriendly(raw), kind: resolved.kind, interface: resolved.interface };
             raw = resolved.jetton;
           } catch (err2) {
             req.log?.warn('resolved jetton also not found', { from: raw, to: resolved.jetton, err: err2.message });
@@ -50,7 +55,13 @@ module.exports = function tokenRoute({ tonapi, db, dexDetection, config }) {
     }
 
     const metadata = jetton.metadata || {};
-    const adminAddr = jetton.admin?.address || null;
+    // Some contracts (e.g. SCAT) renounce by setting admin to the zero address
+    // instead of clearing the field. Treat that as null so the UI shows
+    // "renounced" instead of an "address" that doesn't exist.
+    const rawAdmin = jetton.admin?.address || null;
+    const adminAddr = rawAdmin && rawAdmin !== '0:0000000000000000000000000000000000000000000000000000000000000000'
+      ? rawAdmin
+      : null;
 
     // Phase 0 deployer derivation — best effort, page-1 only.
     const probable = await tonapi.getProbableDeployer(raw).catch(() => null);
@@ -104,8 +115,10 @@ module.exports = function tokenRoute({ tonapi, db, dexDetection, config }) {
         trading = {
           dexes,
           primary_pool: detection.primary?.pool || null,
+          primary_pool_friendly: safeFriendly(detection.primary?.pool),
           primary_dex:  detection.primary?.dex  || null,
           paired_with:  detection.primary?.paired_with || null,
+          paired_with_friendly: safeFriendly(detection.primary?.paired_with),
           url: dexes.length ? `${config?.basePath || ''}/trading/${raw}` : null,
         };
       } catch (err) {
@@ -128,6 +141,7 @@ module.exports = function tokenRoute({ tonapi, db, dexDetection, config }) {
       ...holders,
       top: holders.top.map((h) => ({
         ...h,
+        address_friendly: safeFriendly(h.address),
         wallet: labelOf(h.address),
         is_lp:  detectedPoolAddresses.has(h.address),
       })),
@@ -168,14 +182,18 @@ module.exports = function tokenRoute({ tonapi, db, dexDetection, config }) {
         resolved_from: resolvedFrom,
         token: {
           address: raw,
-          address_friendly: input !== raw ? input : null,
+          // Always emit address_friendly (EQ form), even when the user pasted
+          // raw — the UI prefers friendly everywhere.
+          address_friendly: safeFriendly(raw),
           name: metadata.name || null,
           symbol: metadata.symbol || null,
           decimals: metadata.decimals != null ? Number(metadata.decimals) : null,
           supply: jetton.total_supply || null,
           admin: adminAddr,
+          admin_friendly: safeFriendly(adminAddr),
           admin_wallet: labelOf(adminAddr),
           deployer: deployerAddr,
+          deployer_friendly: safeFriendly(deployerAddr),
           deployer_wallet: labelOf(deployerAddr),
           deployer_hint: probable?.hint || null,
           deployed_at: deployedAt,

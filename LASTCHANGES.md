@@ -4,6 +4,19 @@ Newest first. Append a fresh entry at the top of this file after every significa
 
 ---
 
+## 2026-05-27 — Friendly EQ addresses everywhere + honest sync indicator
+
+Two follow-ups from yesterday's trading-page polish.
+
+- **`toFriendly()` in `src/lib/address.js`** with full CRC16 + base64url encoding, idempotent on already-friendly input, surfaces the STON.fi native pseudo-address (`0:000…000`) as the symbolic string `'TON'`. Plus `bothForms(addr)` returning `{ raw, friendly }`. 10 new tests in `tests/address.test.js`, all 42 across the suite green.
+- **Every API response now carries `*_friendly` siblings** for raw addresses. `src/routes/token.js` annotates token / admin / deployer / holders / trading.primary_pool. `src/routes/trading.js` annotates pool address, paired_with, trader, asset_in/out on every trade row. `src/routes/trading-ws.js` does the same for live trade messages and the `subscribed` greeting. `src/analyzers/developer.js` adds `address_friendly` to the developer card. Raw stays the canonical key inside DB and URL params; admin endpoint still accepts both forms.
+- **`views/index.html` and `views/trading.html`** now prefer `*_friendly` for display in every spot — top holders, admin, deployer, developer card, token header, primary-pool stat, trade-table trader column, trader filter banner, copy-to-clipboard button. Tooltips include both forms so the raw address is still one hover away.
+- **Renounced admin bugfix.** Some contracts (SCAT among them) renounce by setting admin to the literal zero address. The token route now normalises that to `null` so the UI renders "renounced" instead of an EQ-string for an address that doesn't exist.
+- **`last_checked_at` in `trading_sync_state`** (migration `004_trading_last_checked.sql`) — separate from `newest_synced_ts`. Both the REST `/trades` route and the `trade-stream` poll tick now bump it on every poll, even when no new trades arrived. The trading page now shows "newest trade Xm ago · checked Ys ago" so a quiet pool no longer looks like a stalled system. Client also re-renders the relative timestamps every second and bumps `last_checked_at` locally on each WS `ping` / `trade` so the badge feels live between server-side updates.
+- **WS heartbeat shortened to 10s** (was 30s). The `ping` frame is what drives the "checked Ys ago" indicator client-side on quiet pools, so a long interval made the page look stalled even when the upstream polling was still firing every ~8s.
+
+---
+
 ## 2026-05-26 — Trading page polish: live WS unblocked, trader-row icons
 
 Three small wins on the trading page driven by a user report ("offline never goes live; clicking a wallet bounces to the main page with 'jetton not found'"). All fix-and-improve, no new endpoints.

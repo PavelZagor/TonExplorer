@@ -405,20 +405,28 @@ function getSyncState(db, poolAddress) {
   return db.prepare('SELECT * FROM trading_sync_state WHERE pool_address = ?').get(poolAddress) || null;
 }
 
-function setSyncState(db, poolAddress, { oldestTs, newestTs, fullySynced }) {
+// setSyncState always bumps `last_checked_at` to now() — that's what tells the
+// UI "the system is alive" independently of whether any new trades landed.
+// Caller can override via `checkedAt` (for tests) or skip the bump with
+// `bumpChecked: false` if they don't want to touch it (rare; mostly historical).
+function setSyncState(db, poolAddress, { oldestTs, newestTs, fullySynced, checkedAt, bumpChecked = true } = {}) {
   const prev = getSyncState(db, poolAddress);
   const oldest = oldestTs != null ? Number(oldestTs) : prev?.oldest_synced_ts ?? null;
   const newest = newestTs != null ? Number(newestTs) : prev?.newest_synced_ts ?? null;
   const fully  = fullySynced != null ? (fullySynced ? 1 : 0) : prev?.fully_synced ?? 0;
+  const checked = bumpChecked
+    ? (checkedAt != null ? Number(checkedAt) : Math.floor(Date.now() / 1000))
+    : prev?.last_checked_at ?? null;
   const stmt = db.prepare(`
-    INSERT INTO trading_sync_state (pool_address, oldest_synced_ts, newest_synced_ts, fully_synced)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO trading_sync_state (pool_address, oldest_synced_ts, newest_synced_ts, fully_synced, last_checked_at)
+    VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(pool_address) DO UPDATE SET
       oldest_synced_ts = COALESCE(excluded.oldest_synced_ts, trading_sync_state.oldest_synced_ts),
       newest_synced_ts = COALESCE(excluded.newest_synced_ts, trading_sync_state.newest_synced_ts),
-      fully_synced     = excluded.fully_synced
+      fully_synced     = excluded.fully_synced,
+      last_checked_at  = COALESCE(excluded.last_checked_at, trading_sync_state.last_checked_at)
   `);
-  stmt.run(poolAddress, oldest, newest, fully);
+  stmt.run(poolAddress, oldest, newest, fully, checked);
   return getSyncState(db, poolAddress);
 }
 

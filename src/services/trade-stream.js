@@ -133,7 +133,12 @@ class TradeStream extends EventEmitter {
           if (this._logger) this._logger.warn('trade-stream tonapi poll failed', { pool: poolAddress, err: err.message });
         }
       }
-      if (fresh.length === 0) return;
+      // Always bump last_checked_at — UI uses it to prove the stream is alive
+      // even when the pool itself is quiet for hours.
+      if (fresh.length === 0) {
+        setSyncState(this._db, poolAddress, {});
+        return;
+      }
 
       // Persist in one transaction.
       const inserted = insertTrades(this._db, poolAddress, fresh.map((f) => f.row));
