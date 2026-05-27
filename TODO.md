@@ -36,6 +36,7 @@ Active sprint = **Phase 0 (Foundation)** from [`ROADMAP.md`](./ROADMAP.md). Chec
 - [ ] **Trade history** (largest piece). Background indexer per "interesting" jetton: paginate `/v2/blockchain/accounts/{master}/transactions` with `before_lt` until either we hit the 30-day cutoff or the start of history. Store in a new `jetton_trades` table; expose a timeline panel. (At ~700ms / 100 tx, a busy meme like PUTIN takes ~20 min for a month, so this is strictly background, not on-demand.)
 - [ ] **LP-aware concentration flags** — once a `wallet.tags` contains `lp`, exclude that holder from the top-N concentration sums. Today PUTIN's top-1 (26.66%) is the DeDust pool, so the no-signals verdict is the right call but for the wrong reason.
 - [x] **Trading page with DeDust integration** — shipped 2026-05-25 in 10 commits (one per spec step). DeDust trades + candles + live WS stream, STON.fi detection-only, jetton search, screening-page trading badge. See [`docs/07-trading.md`](./docs/07-trading.md) and `LASTCHANGES.md`.
+- [x] **Trading page: trader-row icons + live WS unblocked** — nginx `Upgrade`/`Connection` headers added so the live stream connects; ✎ rename and 🔎 filter icons on every trader row, address text now opens tonviewer in a new tab (no more `?address=<wallet>` dead-end). 2026-05-26.
 
 ## Trading follow-ups (Phase 2 candidates)
 

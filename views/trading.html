@@ -29,15 +29,15 @@
       </div>
       <div class="flex items-center gap-4">
         <!--
-          Live indicator dot.
-          Wired in step 6 (WebSocket stream). For now: REST-only, stays gray.
-          When step 6 lands, flip class to: bg-emerald-500 animate-pulse
-          and update the title attribute.
+          Live indicator dot. Flips to a green pulse once the WebSocket subscribes.
+          The server also polls DeDust + TonAPI every ~8s, so even in `offline`
+          mode the next page reload shows fresh data; `live` just means push.
         -->
         <span class="flex items-center gap-2 text-xs text-slate-400">
-          <span id="live-dot" class="inline-block w-2.5 h-2.5 rounded-full bg-slate-500" title="REST-only (live stream not wired yet)"></span>
+          <span id="live-dot" class="inline-block w-2.5 h-2.5 rounded-full bg-slate-500" title="No WebSocket — refresh page to see new trades"></span>
           <span id="live-label">offline</span>
         </span>
+        <button id="settings-btn" class="text-sm text-slate-400 hover:text-slate-200" title="Admin token">⚙</button>
         <a class="text-sm text-slate-400 hover:text-slate-200" href="https://github.com/PavelZagor/TonExplorer" target="_blank" rel="noopener">GitHub →</a>
       </div>
     </div>
@@ -123,6 +123,14 @@
         </div>
         <span id="trades-sync" class="text-xs text-slate-500">—</span>
       </div>
+      <!-- Active trader filter — hidden until the user clicks the 🔎 icon in a row. -->
+      <div id="trader-filter-banner" class="hidden mb-3 flex items-center justify-between gap-2 bg-emerald-900/30 border border-emerald-700 rounded px-3 py-2 text-xs text-emerald-200">
+        <span>
+          Filtering by trader
+          <a id="trader-filter-link" href="#" target="_blank" rel="noopener" class="mono underline hover:text-emerald-100"></a>
+        </span>
+        <button id="trader-filter-clear" class="text-emerald-300 hover:text-white px-2 leading-none" title="Clear filter">×</button>
+      </div>
       <div class="trades-scroll overflow-x-auto">
         <table class="w-full text-sm">
           <thead class="text-xs text-slate-400">
@@ -146,6 +154,63 @@
     </section>
   </main>
 
+  <!-- Edit overlay: rename/tag a wallet. Markup mirrors views/index.html. -->
+  <div id="edit-overlay" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center px-4 z-50">
+    <div class="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-lg p-5 space-y-3">
+      <div class="flex items-center justify-between">
+        <h3 class="font-semibold text-lg">Edit wallet</h3>
+        <button id="edit-close" class="text-slate-400 hover:text-slate-100 text-xl leading-none">×</button>
+      </div>
+      <p id="edit-addr" class="mono text-xs text-slate-400 truncate-addr"></p>
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Label</label>
+        <input id="edit-label" type="text" maxlength="80"
+               class="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+               placeholder="e.g. PUTIN/TON DeDust pool" />
+      </div>
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Tags</label>
+        <div id="edit-tag-presets" class="flex flex-wrap gap-2 mb-2"></div>
+        <input id="edit-tags-input" type="text"
+               class="w-full mono bg-slate-950 border border-slate-700 rounded px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+               placeholder="comma-separated, e.g. lp, mev" />
+        <p class="text-[10px] text-slate-500 mt-1">Click a preset to toggle. Custom tags are lowercased and stripped of punctuation. Max 8.</p>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Notes</label>
+        <textarea id="edit-notes" rows="3" maxlength="1000"
+                  class="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  placeholder="Free-form. Visible only to you."></textarea>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button id="edit-cancel" class="px-3 py-2 rounded text-sm text-slate-300 hover:bg-slate-800">Cancel</button>
+        <button id="edit-save" class="px-3 py-2 rounded text-sm bg-emerald-600 hover:bg-emerald-500 text-white">Save</button>
+      </div>
+      <p id="edit-msg" class="text-xs text-amber-300 hidden"></p>
+    </div>
+  </div>
+
+  <!-- Settings overlay: admin token. -->
+  <div id="settings-overlay" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center px-4 z-50">
+    <div class="bg-slate-900 border border-slate-700 rounded-lg w-full max-w-md p-5 space-y-3">
+      <div class="flex items-center justify-between">
+        <h3 class="font-semibold text-lg">Admin token</h3>
+        <button id="settings-close" class="text-slate-400 hover:text-slate-100 text-xl leading-none">×</button>
+      </div>
+      <p class="text-xs text-slate-400">
+        Required to edit wallet labels and links. Stored in this browser only (localStorage), sent as
+        <span class="mono">Authorization: Bearer …</span> to <span class="mono">/api/admin/*</span>.
+      </p>
+      <input id="settings-token" type="password" autocomplete="off"
+             class="w-full mono bg-slate-950 border border-slate-700 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+             placeholder="paste ADMIN_TOKEN from .env" />
+      <div class="flex justify-end gap-2 pt-2">
+        <button id="settings-clear" class="px-3 py-2 rounded text-sm text-red-300 hover:bg-slate-800">Forget</button>
+        <button id="settings-save"  class="px-3 py-2 rounded text-sm bg-emerald-600 hover:bg-emerald-500 text-white">Save</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     // ---------------------------------------------------------------------------
     // BASE_PATH plumbing — same pattern as views/index.html.
@@ -153,6 +218,20 @@
     // Do NOT hardcode '/explorer' — production may be mounted elsewhere.
     // ---------------------------------------------------------------------------
     const BASE = (document.querySelector('meta[name="base-path"]').content || '').replace(/\/$/, '');
+    // Shared with views/index.html — same localStorage key so the admin token
+    // set on the main page works here too without re-entering it.
+    const TOKEN_KEY = 'tonexplorer.admin_token';
+    const PRESET_TAGS = ['lp', 'mev', 'farm', 'cex', 'rugger', 'trusted'];
+    const TAG_STYLE = {
+      lp:      'bg-cyan-900/40    border-cyan-700    text-cyan-200',
+      mev:     'bg-fuchsia-900/40 border-fuchsia-700 text-fuchsia-200',
+      farm:    'bg-orange-900/40  border-orange-700  text-orange-200',
+      cex:     'bg-blue-900/40    border-blue-700    text-blue-200',
+      rugger:  'bg-red-900/40     border-red-700     text-red-200',
+      trusted: 'bg-emerald-900/40 border-emerald-700 text-emerald-200',
+      _:       'bg-slate-800      border-slate-600   text-slate-300',
+    };
+    function tagStyle(t) { return TAG_STYLE[t] || TAG_STYLE._; }
 
     // ---------------------------------------------------------------------------
     // DOM handles.
@@ -198,6 +277,7 @@
       baseSymbol: 'tokens',      // display symbol of the jetton
       baseDecimals: 9,
       quoteDecimals: 9,
+      traderFilter: null,        // when set, renderTrades() shows only this trader's rows
     };
 
     // ---------------------------------------------------------------------------
@@ -454,12 +534,16 @@
     }
 
     function renderTrades() {
-      const trades = state.trades;
-      tradesCount.textContent = trades.length.toLocaleString();
-      if (state.info && state.info.primary) {
-        // Sync timestamp is from the trades response — track separately.
-      }
-      tradesBody.innerHTML = trades.map((tr) => tradeRow(tr)).join('');
+      const all = state.trades;
+      const visible = state.traderFilter
+        ? all.filter((tr) => tr.trader === state.traderFilter)
+        : all;
+      tradesCount.textContent = state.traderFilter
+        ? `${visible.length.toLocaleString()} / ${all.length.toLocaleString()}`
+        : visible.length.toLocaleString();
+      tradesBody.innerHTML = visible.length
+        ? visible.map((tr) => tradeRow(tr)).join('')
+        : `<tr><td colspan="6" class="py-4 text-center text-xs text-slate-500">No trades match the active filter.</td></tr>`;
     }
 
     function tradeRow(tr) {
@@ -482,11 +566,20 @@
         : '—';
 
       const traderShort = shortAddr(tr.trader);
-      // We only have the raw form here; the index page accepts raw or friendly,
-      // so passing it through ?address= works either way.
-      const traderHref = tr.trader
-        ? `${BASE}/?address=${encodeURIComponent(tr.trader)}`
-        : '#';
+      // The address itself links out to tonviewer (external explorer with full
+      // tx history for the wallet). Local wallet-analysis is not built yet.
+      const tonviewerHref = tr.trader
+        ? `https://tonviewer.com/${encodeURIComponent(tr.trader)}`
+        : null;
+      const addrAttr = escapeHtml(tr.trader || '');
+
+      const traderCell = tr.trader ? `
+        <span class="inline-flex items-center gap-1.5">
+          <a href="${tonviewerHref}" target="_blank" rel="noopener" class="hover:text-emerald-300" title="${addrAttr}\nOpen on tonviewer.com">${escapeHtml(traderShort)}</a>
+          <button type="button" class="js-filter-trader text-slate-500 hover:text-emerald-400 px-1 leading-none" data-addr="${addrAttr}" title="Show only this trader">🔎</button>
+          <button type="button" class="js-edit-wallet  text-slate-500 hover:text-emerald-400 px-1 leading-none" data-addr="${addrAttr}" title="Edit label / tags">✎</button>
+        </span>
+      ` : '<span class="text-slate-500">—</span>';
 
       return `
         <tr class="border-t border-slate-800 align-baseline">
@@ -495,12 +588,27 @@
           <td class="py-1.5 pr-3 mono text-xs text-right whitespace-nowrap">${formatNumber(baseAmt, { maxFrac: 4 })} <span class="text-slate-500">${escapeHtml(state.baseSymbol)}</span></td>
           <td class="py-1.5 pr-3 mono text-xs text-right whitespace-nowrap">${formatNumber(quoteAmt, { maxFrac: 4 })} <span class="text-slate-500">${escapeHtml(state.quoteSymbol)}</span></td>
           <td class="py-1.5 pr-3 mono text-xs text-right whitespace-nowrap">${priceStr}</td>
-          <td class="py-1.5 pr-3 mono text-xs">
-            <a href="${traderHref}" class="hover:text-emerald-300" title="${escapeHtml(tr.trader || '')}">${escapeHtml(traderShort)}</a>
-          </td>
+          <td class="py-1.5 pr-3 mono text-xs">${traderCell}</td>
         </tr>
       `;
     }
+
+    // Trader filter: clicking the 🔎 icon scopes the trades table to one wallet.
+    function setTraderFilter(addr) {
+      state.traderFilter = addr || null;
+      const banner = $('#trader-filter-banner');
+      const link = $('#trader-filter-link');
+      if (state.traderFilter) {
+        link.textContent = shortAddr(state.traderFilter);
+        link.title = state.traderFilter;
+        link.href = `https://tonviewer.com/${encodeURIComponent(state.traderFilter)}`;
+        banner.classList.remove('hidden');
+      } else {
+        banner.classList.add('hidden');
+      }
+      renderTrades();
+    }
+    $('#trader-filter-clear').addEventListener('click', () => setTraderFilter(null));
 
     function updateSyncBadge(sync) {
       if (!sync) { tradesSync.textContent = '—'; return; }
@@ -700,7 +808,7 @@
           lbl.textContent = 'live';
         } else {
           dot.className = 'inline-block w-2.5 h-2.5 rounded-full bg-slate-500';
-          dot.title = 'REST-only (live stream not wired yet)';
+          dot.title = 'No WebSocket — refresh page to see new trades';
           lbl.textContent = 'offline';
         }
       },
@@ -755,6 +863,151 @@
       window.addEventListener('beforeunload', () => { closedByUser = true; try { ws?.close(); } catch {} });
       connect();
     }
+
+    // ---------------------------------------------------------------------------
+    // Admin token + wallet-edit overlay — mirrors views/index.html so the same
+    // token (localStorage key tonexplorer.admin_token) and same overlay work
+    // here. Trader rows expose 🔎 (filter) and ✎ (edit) icons.
+    // ---------------------------------------------------------------------------
+    function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
+    function setToken(t) { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); }
+
+    async function adminFetch(path, opts = {}) {
+      const tok = getToken();
+      const headers = { ...(opts.headers || {}), 'Content-Type': 'application/json' };
+      if (tok) headers['Authorization'] = `Bearer ${tok}`;
+      return fetch(`${BASE}/api/admin${path}`, { ...opts, headers });
+    }
+
+    const editOverlay = $('#edit-overlay');
+    const editAddrEl = $('#edit-addr');
+    const editLabelEl = $('#edit-label');
+    const editNotesEl = $('#edit-notes');
+    const editTagsInputEl = $('#edit-tags-input');
+    const editPresetsEl = $('#edit-tag-presets');
+    const editMsgEl = $('#edit-msg');
+
+    let editing = null; // { addr, tags: Set<string> }
+
+    function renderEditPresets() {
+      if (!editing) return;
+      editPresetsEl.innerHTML = PRESET_TAGS.map((t) => {
+        const on = editing.tags.has(t);
+        const base = on ? tagStyle(t) : 'bg-slate-900 border-slate-700 text-slate-500';
+        return `<button type="button" class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${base}" data-tag="${t}">${t}</button>`;
+      }).join(' ');
+    }
+    function syncTagsInput() { editTagsInputEl.value = [...editing.tags].join(', '); }
+    function parseTagsInput() {
+      const raw = (editTagsInputEl.value || '').split(',').map((s) => s.trim().toLowerCase().replace(/[^a-z0-9_\-]/g, '')).filter(Boolean);
+      editing.tags = new Set(raw.slice(0, 8));
+      renderEditPresets();
+    }
+    editTagsInputEl.addEventListener('change', parseTagsInput);
+    editTagsInputEl.addEventListener('blur',   parseTagsInput);
+    editPresetsEl.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-tag]');
+      if (!b || !editing) return;
+      const t = b.dataset.tag;
+      if (editing.tags.has(t)) editing.tags.delete(t); else editing.tags.add(t);
+      renderEditPresets();
+      syncTagsInput();
+    });
+
+    async function openEdit(addr) {
+      editing = { addr, tags: new Set() };
+      editAddrEl.textContent = addr;
+      editLabelEl.value = '';
+      editNotesEl.value = '';
+      editTagsInputEl.value = '';
+      editMsgEl.classList.add('hidden');
+      renderEditPresets();
+      editOverlay.classList.remove('hidden');
+      editLabelEl.focus();
+
+      // Best-effort pre-fill from server (same admin endpoint as the main page).
+      try {
+        const r = await adminFetch(`/wallet/${encodeURIComponent(addr)}`);
+        if (r.status === 401) { editMsgEl.textContent = 'admin token missing or invalid — set it via the ⚙ button before saving.'; editMsgEl.classList.remove('hidden'); return; }
+        if (r.status === 503) { editMsgEl.textContent = 'admin disabled on this instance (ADMIN_TOKEN is empty in .env).'; editMsgEl.classList.remove('hidden'); return; }
+        if (!r.ok) return;
+        const body = await r.json();
+        if (body.ok) {
+          editLabelEl.value = body.data.label || '';
+          editNotesEl.value = body.data.notes || '';
+          editing.tags = new Set(body.data.tags || []);
+          renderEditPresets();
+          syncTagsInput();
+        }
+      } catch { /* swallow — empty form is fine */ }
+    }
+
+    function closeEdit() { editOverlay.classList.add('hidden'); editing = null; }
+    $('#edit-close').addEventListener('click', closeEdit);
+    $('#edit-cancel').addEventListener('click', closeEdit);
+    editOverlay.addEventListener('click', (e) => { if (e.target === editOverlay) closeEdit(); });
+
+    $('#edit-save').addEventListener('click', async () => {
+      if (!editing) return;
+      parseTagsInput();
+      const payload = {
+        label: editLabelEl.value.trim() || null,
+        notes: editNotesEl.value.trim() || null,
+        tags: [...editing.tags],
+      };
+      const r = await adminFetch(`/wallet/${encodeURIComponent(editing.addr)}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+      if (r.status === 401) {
+        const tok = prompt('Admin token? (will be saved in this browser)');
+        if (tok) { setToken(tok); return $('#edit-save').click(); }
+        editMsgEl.textContent = 'unauthorized — open ⚙ to set the token.';
+        editMsgEl.classList.remove('hidden');
+        return;
+      }
+      if (r.status === 503) {
+        editMsgEl.textContent = 'admin disabled — set ADMIN_TOKEN in .env and restart the server.';
+        editMsgEl.classList.remove('hidden');
+        return;
+      }
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        editMsgEl.textContent = body.error?.message || `save failed (${r.status})`;
+        editMsgEl.classList.remove('hidden');
+        return;
+      }
+      closeEdit();
+    });
+
+    // Settings overlay — same UX as the main page.
+    const settingsOverlay = $('#settings-overlay');
+    $('#settings-btn').addEventListener('click', () => {
+      $('#settings-token').value = getToken();
+      settingsOverlay.classList.remove('hidden');
+      $('#settings-token').focus();
+    });
+    $('#settings-close').addEventListener('click', () => settingsOverlay.classList.add('hidden'));
+    settingsOverlay.addEventListener('click', (e) => { if (e.target === settingsOverlay) settingsOverlay.classList.add('hidden'); });
+    $('#settings-save').addEventListener('click', () => { setToken($('#settings-token').value.trim()); settingsOverlay.classList.add('hidden'); });
+    $('#settings-clear').addEventListener('click', () => { setToken(''); $('#settings-token').value = ''; });
+
+    // Escape closes either overlay.
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if (!editOverlay.classList.contains('hidden')) closeEdit();
+      else if (!settingsOverlay.classList.contains('hidden')) settingsOverlay.classList.add('hidden');
+    });
+
+    // Row-icon click delegation. The trade table is re-rendered on every tick,
+    // so per-row listeners would churn — one document-level handler is cheaper
+    // and easier to reason about.
+    document.addEventListener('click', (e) => {
+      const filterBtn = e.target.closest('button.js-filter-trader');
+      if (filterBtn) { e.preventDefault(); setTraderFilter(filterBtn.dataset.addr); return; }
+      const editBtn = e.target.closest('button.js-edit-wallet');
+      if (editBtn) { e.preventDefault(); openEdit(editBtn.dataset.addr); }
+    });
 
     // ---------------------------------------------------------------------------
     // Copy address button.

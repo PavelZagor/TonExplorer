@@ -4,6 +4,17 @@ Newest first. Append a fresh entry at the top of this file after every significa
 
 ---
 
+## 2026-05-26 — Trading page polish: live WS unblocked, trader-row icons
+
+Three small wins on the trading page driven by a user report ("offline never goes live; clicking a wallet bounces to the main page with 'jetton not found'"). All fix-and-improve, no new endpoints.
+
+- **nginx WS upgrade was missing.** The `/explorer/` location block only forwarded standard proxy headers — `Upgrade` / `Connection` were stripped, so the WebSocket handshake at `/explorer/api/trading/<jetton>/stream` arrived at Express as a plain GET and 404'd. Added the two `proxy_set_header` lines plus `proxy_read_timeout 3600s` (the in-app heartbeat is every 30s — 30s read timeout would borderline-kill the connection on quiet pools). Confirmed via `curl --http1.1 -H 'Upgrade: websocket' …` returning `101 Switching Protocols` + the `subscribed` greeting. Documented in `docs/06-deployment.md` so this doesn't bite again on a fresh deploy.
+- **Trader column UX.** Each row now exposes three affordances next to the trader address: the address itself opens tonviewer in a new tab (we don't have a wallet-analysis page in-project yet), 🔎 scopes the trades table to that single trader with a dismissable banner showing the active filter, and ✎ opens the same label/tags/notes overlay as the main page. The overlay reuses the existing `/api/admin/wallet/:address` admin endpoint and the `tonexplorer.admin_token` localStorage key so a token set on the main page works on the trading page without re-entry.
+- **Live indicator tooltip honesty.** Off→on tooltip used to say "REST-only (live stream not wired yet)" — that's been wrong since step 6 of the original feature. Now reads "No WebSocket — refresh page to see new trades", which matches what actually happens server-side (8s polling continues even without a WS subscriber).
+- Click on the trader address previously did `?address=<wallet>` against `/api/token/…`, which always returned `jetton_not_found` because the trader is a wallet, not a jetton master. That dead-end is now the tonviewer external link.
+
+---
+
 ## 2026-05-25 — LP-aware concentration flags
 
 Direct follow-on to the trading work earlier today. The screening verdict used to count DEX pools as ordinary concentration: a pool sitting in the top-N holders would inflate top1/top10 and fire a "majority" flag for what is actually liquid supply. Now every top holder is annotated `is_lp` from a live join against the detection result for that jetton, and `concentrationFlags` skips them before computing sums.

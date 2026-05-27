@@ -34,7 +34,18 @@ The structured logger built into `src/lib/logger.js` already emits ISO timestamp
 
 ## nginx vhost (sketch)
 
-The server expects to live behind a reverse proxy that mounts it under `BASE_PATH` (default `/explorer`). Example nginx server block (put your own hostname in):
+The server expects to live behind a reverse proxy that mounts it under `BASE_PATH` (default `/explorer`). The trading page also opens a WebSocket at `/explorer/api/trading/<jetton>/stream`, so the location block has to forward the `Upgrade` / `Connection` headers and use a long `proxy_read_timeout` (the in-app heartbeat is every 30 s).
+
+You also need a single `map` block at `http {}` level to derive `$connection_upgrade` — most installs have this once in `/etc/nginx/nginx.conf`:
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+```
+
+Example server block (replace the hostname):
 
 ```nginx
 server {
@@ -50,7 +61,10 @@ server {
         proxy_set_header   X-Real-IP         $remote_addr;
         proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto $scheme;
-        proxy_read_timeout 30s;
+        proxy_set_header   Upgrade           $http_upgrade;
+        proxy_set_header   Connection        $connection_upgrade;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
     }
 }
 ```
@@ -59,6 +73,7 @@ Notes:
 - `proxy_pass` keeps the `/explorer/` prefix because Express mounts everything under `BASE_PATH`. Match what your `.env` says.
 - `TRUST_PROXY=loopback` in `.env` so Express trusts `X-Forwarded-For` from nginx running on the same host.
 - TLS lives at nginx; the Node process serves plaintext on `127.0.0.1:$PORT` only when proxied. If you bind on `0.0.0.0:$PORT`, firewall the port from the outside.
+- If you forget the `Upgrade` / `Connection` headers, REST traffic keeps working but the live trade feed on the trading page stays stuck at "offline" — `GET …/stream` arrives at Express as a normal request and gets a 404.
 
 ## Updating
 
